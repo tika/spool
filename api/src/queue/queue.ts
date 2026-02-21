@@ -10,7 +10,7 @@ export function enqueue(job: Job): void {
     ...(job.type === "generate_curriculum" && { topic: job.topicSlug }),
     ...(job.type === "generate_videos" && {
       topic: job.topicSlug,
-      concepts: job.conceptSlugs.length,
+      concepts: job.concepts.length,
     }),
     queueLength: jobs.length,
   });

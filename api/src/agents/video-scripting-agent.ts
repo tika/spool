@@ -6,7 +6,8 @@ import {
 	VIDEO_SCRIPT_USER_PROMPT,
 } from "../lib/prompts";
 
-const VIDEO_SCRIPT_MODEL = "google/gemini-2.0-flash";
+// const VIDEO_SCRIPT_MODEL = "google/gemini-2.5-flash";
+const VIDEO_SCRIPT_MODEL = "openai/gpt-oss-120b";
 
 const ScriptOutputSchema = z.object({
 	transcript: z.string(),

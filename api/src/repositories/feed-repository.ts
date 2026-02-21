@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { db, concepts, conceptPrerequisites, topics } from "../db";
+import { db, concepts, conceptPrerequisites, topics, reels } from "../db";
 
 export interface ConceptWithPrereqs {
 	id: string;
@@ -9,6 +9,7 @@ export interface ConceptWithPrereqs {
 	difficulty: number;
 	orderIndex: number;
 	prerequisiteIds: string[];
+	videoUrl: string | null;
 }
 
 export class FeedRepository {
@@ -39,8 +40,9 @@ export class FeedRepository {
 
 		if (conceptRows.length === 0) return [];
 
-		// Get all prerequisite relationships for these concepts
 		const conceptIds = conceptRows.map((c) => c.id);
+
+		// Get all prerequisite relationships for these concepts
 		const prereqRows = await db
 			.select({
 				conceptId: conceptPrerequisites.conceptId,
@@ -53,10 +55,33 @@ export class FeedRepository {
 		const prereqMap = new Map<string, string[]>();
 
 		for (const row of prereqRows) {
-			if (conceptIdSet.has(row.conceptId) && conceptIdSet.has(row.prerequisiteId)) {
+			if (
+				conceptIdSet.has(row.conceptId) &&
+				conceptIdSet.has(row.prerequisiteId)
+			) {
 				const existing = prereqMap.get(row.conceptId) || [];
 				existing.push(row.prerequisiteId);
 				prereqMap.set(row.conceptId, existing);
+			}
+		}
+
+		// Get reels for these concepts (completed ones only)
+		const reelRows = await db
+			.select({
+				conceptId: reels.conceptId,
+				videoUrl: reels.videoUrl,
+			})
+			.from(reels)
+			.where(eq(reels.status, "completed"));
+
+		// Map concept ID to video URL
+		const reelMap = new Map<string, string>();
+		for (const reel of reelRows) {
+			if (conceptIdSet.has(reel.conceptId) && reel.videoUrl) {
+				// Keep first reel per concept
+				if (!reelMap.has(reel.conceptId)) {
+					reelMap.set(reel.conceptId, reel.videoUrl);
+				}
 			}
 		}
 
@@ -68,6 +93,7 @@ export class FeedRepository {
 			difficulty: c.difficulty,
 			orderIndex: c.orderIndex,
 			prerequisiteIds: prereqMap.get(c.id) || [],
+			videoUrl: reelMap.get(c.id) ?? null,
 		}));
 	}
 }

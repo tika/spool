@@ -91,7 +91,7 @@ function conceptToFeedItem(c: ConceptWithPrereqs): FeedItem {
 		conceptName: c.name,
 		conceptDescription: c.description,
 		difficulty: c.difficulty,
-		videoUrl: null,
+		videoUrl: c.videoUrl,
 	};
 }
 

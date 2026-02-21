@@ -3,12 +3,16 @@ import {
 	getRenderProgress,
 	AwsRegion,
 } from "@remotion/lambda/client";
+import { log } from "../lib/logger";
 import type { RenderInput } from "../types/video";
 
 const REMOTION_FUNCTION_NAME =
 	process.env.REMOTION_LAMBDA_FUNCTION || "remotion-render";
 const REMOTION_SERVE_URL = process.env.REMOTION_SERVE_URL || "";
 const AWS_REGION = (process.env.AWS_REGION || "us-east-2") as AwsRegion;
+
+// Set to true to skip Lambda rendering (for local dev without Lambda deployed)
+const MOCK_RENDER = process.env.MOCK_RENDER === "true";
 
 export interface RenderResult {
 	renderId: string;
@@ -26,6 +30,16 @@ export interface RenderProgress {
  * Triggers a render on Remotion Lambda
  */
 export async function triggerRender(props: RenderInput): Promise<RenderResult> {
+	if (MOCK_RENDER) {
+		log.video.info("Mock render mode - skipping Lambda", {
+			duration: props.durationInSeconds,
+		});
+		return {
+			renderId: `mock-${Date.now()}`,
+			bucketName: "mock-bucket",
+		};
+	}
+
 	const { renderId, bucketName } = await renderMediaOnLambda({
 		region: AWS_REGION,
 		functionName: REMOTION_FUNCTION_NAME,
@@ -35,6 +49,7 @@ export async function triggerRender(props: RenderInput): Promise<RenderResult> {
 		codec: "h264",
 		imageFormat: "jpeg",
 		maxRetries: 1,
+		framesPerLambda: 200,
 		privacy: "public",
 		downloadBehavior: {
 			type: "download",
@@ -52,6 +67,14 @@ export async function pollRenderProgress(
 	renderId: string,
 	bucketName: string,
 ): Promise<RenderProgress> {
+	if (MOCK_RENDER || renderId.startsWith("mock-")) {
+		return {
+			done: true,
+			progress: 100,
+			outputUrl: "https://example.com/mock-video.mp4",
+		};
+	}
+
 	const progress = await getRenderProgress({
 		renderId,
 		bucketName,
@@ -90,6 +113,12 @@ export async function waitForRender(
 	onProgress?: (progress: number) => void,
 	timeoutMs: number = 300000, // 5 minutes
 ): Promise<string> {
+	// Mock mode returns immediately
+	if (MOCK_RENDER || renderId.startsWith("mock-")) {
+		if (onProgress) onProgress(100);
+		return "https://example.com/mock-video.mp4";
+	}
+
 	const startTime = Date.now();
 
 	while (Date.now() - startTime < timeoutMs) {

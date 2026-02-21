@@ -1,4 +1,5 @@
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+import { log } from "../lib/logger";
 import type { CaptionWord, TTSResult } from "../types/video";
 
 const client = new ElevenLabsClient({
@@ -32,21 +33,51 @@ export async function generateTTSWithCaptions(
 	const audioBuffer = Buffer.from(audioBase64, "base64");
 
 	// Parse alignment into words
-	const alignment = response.alignment;
-	if (!alignment) {
-		throw new Error("No alignment found");
-	}
-	const captions = parseAlignmentToWords(transcript, alignment);
+	const alignment = response.alignment as CharacterAlignment | undefined;
 
-	// Calculate duration from last caption
-	const durationSeconds =
-		captions.length > 0 ? captions[captions.length - 1].endTime : 0;
+	let captions: CaptionWord[] = [];
+	let durationSeconds = 0;
+
+	if (alignment?.characters && alignment?.character_start_times_seconds) {
+		captions = parseAlignmentToWords(transcript, alignment);
+		durationSeconds =
+			captions.length > 0 ? captions[captions.length - 1].endTime : 0;
+	} else {
+		// Fallback: estimate duration from audio buffer size
+		// MP3 at 128kbps = 16KB per second
+		durationSeconds = Math.ceil(audioBuffer.length / 16000);
+		log.video.warn("No alignment data from TTS, using estimated duration", {
+			estimatedDuration: durationSeconds,
+			bufferSize: audioBuffer.length,
+		});
+
+		// Create simple word-based captions with estimated timing
+		captions = createEstimatedCaptions(transcript, durationSeconds);
+	}
 
 	return {
 		audioBuffer,
 		captions,
 		durationSeconds,
 	};
+}
+
+/**
+ * Creates estimated captions when alignment data is unavailable
+ */
+function createEstimatedCaptions(
+	transcript: string,
+	totalDuration: number,
+): CaptionWord[] {
+	const words = transcript.split(/\s+/).filter((w) => w.length > 0);
+	if (words.length === 0) return [];
+
+	const timePerWord = totalDuration / words.length;
+	return words.map((word, i) => ({
+		word,
+		startTime: i * timePerWord,
+		endTime: (i + 1) * timePerWord,
+	}));
 }
 
 /**
@@ -63,8 +94,8 @@ function parseAlignmentToWords(
 
 	for (let i = 0; i < alignment.characters.length; i++) {
 		const char = alignment.characters[i];
-		const startTime = alignment.character_start_times_seconds[i];
-		const endTime = alignment.character_end_times_seconds[i];
+		const startTime = alignment.character_start_times_seconds[i] ?? 0;
+		const endTime = alignment.character_end_times_seconds[i] ?? startTime;
 
 		// Check if this is a word boundary (space, newline, or punctuation followed by space)
 		if (char === " " || char === "\n" || char === "\t") {

@@ -1,6 +1,7 @@
 import { generateScript } from "../agents/video-scripting-agent";
-import { ExternalServiceError, formatError } from "../lib/errors";
+import { formatError } from "../lib/errors";
 import { log } from "../lib/logger";
+import { reelRepository } from "../repositories/reel-repository";
 import type {
   VideoJob,
   VideoJobInput,
@@ -155,6 +156,19 @@ export async function generateVideo(job: VideoJob): Promise<string> {
     updateJobStatus(job.id, "uploading", 90);
     const videoBuffer = await downloadToBuffer(outputUrl);
     const videoUrl = await uploadVideo(videoBuffer, input.conceptSlug);
+
+    // Save reel to database
+    jobLog.debug("Saving reel to database");
+    await reelRepository.createReel({
+      conceptId: input.conceptId,
+      name: input.conceptName,
+      description: input.conceptDescription,
+      transcript: script.transcript,
+      videoUrl,
+      durationSeconds: tts.durationSeconds,
+      tone: script.tone,
+      status: "completed",
+    });
 
     // Complete
     updateJobStatus(job.id, "completed", 100, { videoUrl });

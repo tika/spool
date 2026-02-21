@@ -69,3 +69,5 @@ R2_BUCKET_NAME=unscroll-videos
 ```bash
 pulumi destroy
 ```
+
+bunx remotion lambda functions deploy --memory=2048 --timeout=240 --region=us-east-2 --enable-v5-runtime --yes

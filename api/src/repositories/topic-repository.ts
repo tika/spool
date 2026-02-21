@@ -122,9 +122,10 @@ export class TopicRepository implements TopicRepositoryForWorker {
 
 	async getConceptsByTopic(
 		topicSlug: string,
-	): Promise<Array<{ slug: string; name: string; description: string }>> {
+	): Promise<Array<{ id: string; slug: string; name: string; description: string }>> {
 		const result = await db
 			.select({
+				id: concepts.id,
 				slug: concepts.slug,
 				name: concepts.name,
 				description: concepts.description,
@@ -135,6 +136,7 @@ export class TopicRepository implements TopicRepositoryForWorker {
 			.orderBy(concepts.orderIndex);
 
 		return result.map((c) => ({
+			id: c.id,
 			slug: c.slug,
 			name: c.name,
 			description: c.description ?? "",
