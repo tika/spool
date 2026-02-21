@@ -1,0 +1,68 @@
+graph TB
+    subgraph INPUT["Input"]
+        U[User enters a topic]
+    end
+
+    subgraph API["Hono API"]
+        U --> R{Topic exists?}
+        R -->|No| CREATE["POST /topics<br/>Create topic + trigger curriculum agent"]
+        R -->|Yes| FEED["GET /feed/:topicSlug/:username<br/>Return ordered video URLs"]
+    end
+
+    subgraph CURRICULUM_AGENT["Curriculum Agent — slow, strategic"]
+        CREATE --> CA1["Analyze topic scope"]
+        CA1 --> CA2["Generate concept DAG<br/>10-15 concepts + prerequisite edges"]
+        CA2 --> CA3["Write to HelixDB:<br/>Concept nodes + Requires edges<br/>+ HasConcept edges to Topic"]
+        CA3 --> CA4["Hand off to Content Delivery Agent:<br/>generate reels for first ~5 concepts"]
+
+        CA5["User hits 70% of known concepts"] --> CA6["Extend the DAG<br/>with next chunk of concepts"]
+        CA6 --> CA3
+    end
+
+    subgraph CONTENT_AGENT["Content Delivery Agent — fast, tactical"]
+        CA4 --> CD1["For each concept, decide:<br/>how many reels? what angles?<br/>e.g. analogy, code demo, visual, quiz"]
+        CD1 --> CD2["Script each reel<br/>(Cerebras for speed)"]
+        CD2 --> CD3["Generate video<br/>TTS + visuals → mp4"]
+        CD3 --> CD4["Store mp4 in AWS S3"]
+        CD4 --> CD5["Generate metadata via AI:<br/>point, tone, difficulty,<br/>quality, conciseness"]
+        CD5 --> CD6["Generate embedding<br/>from transcript"]
+        CD6 --> CD7["Write to HelixDB:<br/>Reel node + ReelEmbedding<br/>+ Teaches edge to Concept<br/>Mark one reel as primary"]
+        CD7 --> CD8["Update Concept status:<br/>no_video → has_video"]
+    end
+
+    subgraph UPLOAD["Video Upload Path"]
+        UP1["POST /videos/upload<br/>+ mp4 file"] --> UP2["Store in AWS S3"]
+        UP2 --> UP3["AI analyzes video:<br/>generate transcript,<br/>metadata, embedding"]
+        UP3 --> UP4["Match to concept via<br/>vector similarity against<br/>ConceptEmbeddings"]
+        UP4 --> CD7
+    end
+
+    subgraph FEED_LOGIC["Feed Assembly"]
+        FEED --> FL1["1. Get all concepts for topic<br/>Topic→HasConcept→Concept"]
+        FL1 --> FL2["2. Get user's watched concepts<br/>User→Watched→Reel→Teaches→Concept"]
+        FL2 --> FL3["3. Topological sort of concept DAG<br/>using Requires edges"]
+        FL3 --> FL4["4. Filter: remove already-watched concepts"]
+        FL4 --> FL5["5. For each next concept,<br/>get primary reel<br/>Concept←Teaches←Reel<br/>where is_primary = true"]
+        FL5 --> FL6["6. Return ordered list<br/>of video URLs"]
+    end
+
+    subgraph STORAGE["Storage"]
+        HDB[("HelixDB<br/>localhost:6969")]
+        S3[("AWS S3<br/>Video files")]
+    end
+
+    CA3 --> HDB
+    CD7 --> HDB
+    CD4 --> S3
+    UP2 --> S3
+    FL1 --> HDB
+
+    subgraph BACKGROUND["Background Workers"]
+        BG1["Video generation queue<br/>Stay ~5 concepts ahead<br/>of user's position"]
+        BG2["Upload processing queue<br/>Analyze + match uploaded videos"]
+        BG3["Graph extension trigger<br/>When user approaches frontier"]
+    end
+
+    CA4 --> BG1
+    UP3 --> BG2
+    CA5 --> BG3

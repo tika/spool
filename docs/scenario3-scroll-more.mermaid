@@ -1,0 +1,56 @@
+---
+title: "Scenario 3: User scrolls in feed → new video appears"
+---
+sequenceDiagram
+    actor User
+    participant API as Hono API
+    participant BG as Background Worker
+    participant CA as Curriculum Agent
+    participant CDA as Content Delivery Agent
+    participant Helix as HelixDB
+    participant S3 as AWS S3
+
+    Note over User: User has watched 8 of 12 concepts with videos
+
+    User->>API: POST /watch { reel_id: "...", completed: true }
+    API->>Helix: recordWatch("tika", reel_id, ...)
+    API->>BG: check generation buffer
+
+    BG->>Helix: getConceptsWithoutVideos("cpp")
+    Helix-->>BG: [concept_11, concept_12, concept_13]
+    Note over BG: Only 4 concepts ahead have videos.<br/>Below threshold of 5. Trigger generation.
+    BG->>CDA: generate reels for concept_11, concept_12
+
+    par Content Delivery Agent generates ahead
+        CDA->>CDA: Script + TTS + render for concept_11
+        CDA->>S3: store concept_11.mp4
+        CDA->>Helix: createReel(..., concept_11, is_primary: true)
+        CDA->>Helix: updateConcept(concept_11, status: "has_video")
+    end
+
+    Note over User: User keeps scrolling...
+
+    User->>API: GET /feed/cpp/tika?after=concept_8
+    API->>Helix: getAllConceptsInTopic("cpp")
+    API->>Helix: getUserWatchedConcepts("tika")
+    API->>API: Topological sort, filter watched, pick primary reels
+    API-->>User: [{ video_url: "s3://.../concept_9.mp4" }, { video_url: "s3://.../concept_10.mp4" }, ...]
+    User->>User: Watches next video
+
+    Note over User: User reaches concept 10 of 12 total concepts in DAG
+
+    BG->>BG: User at 83% of known concepts (>70% threshold)
+    BG->>CA: extend concept graph
+
+    CA->>CA: Plan next chunk of 10 concepts
+    CA->>Helix: createConcept(concept_13, ..., topic: "cpp")
+    CA->>Helix: createConcept(concept_14, ..., topic: "cpp")
+    Note over CA: ... more concepts + prerequisite edges
+    CA->>Helix: addPrerequisite(concept_13 → concept_10)
+    CA->>CDA: generate reels for first 5 new concepts
+
+    CDA->>CDA: Script + TTS + render
+    CDA->>S3: store videos
+    CDA->>Helix: create Reel nodes + Teaches edges
+
+    Note over User: User never hits a wall.<br/>Feed always has content ahead.

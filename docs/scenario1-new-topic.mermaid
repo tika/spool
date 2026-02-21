@@ -1,0 +1,42 @@
+---
+title: "Scenario 1: User creates a new topic → sees first video"
+---
+sequenceDiagram
+    actor User
+    participant API as Hono API
+    participant CA as Curriculum Agent
+    participant CDA as Content Delivery Agent
+    participant Helix as HelixDB
+    participant S3 as AWS S3
+
+    User->>API: POST /topics { title: "C++" }
+    API->>Helix: createTopic("cpp", "C++", ...)
+    API->>CA: generate concept graph for "C++"
+    API-->>User: 202 Accepted { slug: "cpp", status: "generating" }
+
+    Note over CA: Slow, strategic thinking
+    CA->>CA: Plan ~10-15 concepts + prerequisites
+    CA->>Helix: createConcept("variables", ..., topic: "cpp")
+    CA->>Helix: createConcept("constants", ..., topic: "cpp")
+    CA->>Helix: createConcept("data-types", ..., topic: "cpp")
+    CA->>Helix: addPrerequisite("data-types" → "variables")
+    CA->>Helix: addPrerequisite("data-types" → "constants")
+    Note over CA: ... more concepts + edges
+    CA->>Helix: updateTopic("cpp", status: "ready")
+    CA->>CDA: generate reels for first 5 concepts
+
+    Note over CDA: Fast, tactical execution
+    CDA->>CDA: Script reel for "variables" (analogy angle)
+    CDA->>CDA: TTS → voiceover audio
+    CDA->>CDA: Render visuals → mp4
+    CDA->>S3: store variables-analogy.mp4
+    CDA->>Helix: createReel(..., concept: "variables", is_primary: true)
+    CDA->>Helix: updateConcept("variables", status: "has_video")
+    Note over CDA: ... repeats for next 4 concepts
+
+    User->>API: GET /feed/cpp/tika
+    API->>Helix: getConceptsForTopic("cpp")
+    API->>Helix: getUserWatchedConcepts("tika")
+    API->>API: Topological sort DAG, filter watched, pick primary reels
+    API-->>User: [{ video_url: "s3://.../variables-analogy.mp4", ... }, ...]
+    User->>User: Watches first video

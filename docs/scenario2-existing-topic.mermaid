@@ -1,0 +1,31 @@
+---
+title: "Scenario 2: User selects an existing topic → sees video"
+---
+sequenceDiagram
+    actor User
+    participant API as Hono API
+    participant Helix as HelixDB
+
+    User->>API: GET /topics
+    API->>Helix: getAllTopics()
+    API-->>User: [{ slug: "cpp", title: "C++", status: "ready" }, ...]
+
+    User->>API: POST /enroll { username: "tika", topic: "cpp" }
+    API->>Helix: enrollUser("tika", "cpp")
+    API-->>User: 200 OK
+
+    User->>API: GET /feed/cpp/tika
+    API->>Helix: getAllConceptsInTopic("cpp")
+    Helix-->>API: [variables, constants, data-types, ...]
+    API->>Helix: getUserWatchedConcepts("tika")
+    Helix-->>API: [] (nothing watched yet)
+    API->>API: Topological sort DAG
+    API->>API: First concept = "variables" (no prerequisites)
+    API->>Helix: getReelsForConcept("variables")
+    Helix-->>API: [reel_1 (primary), reel_2, reel_3]
+    API->>API: Pick primary reel for each concept in order
+    API-->>User: [{ video_url: "s3://.../variables-analogy.mp4", concept: "variables" }, { video_url: "s3://.../constants-demo.mp4", concept: "constants" }, ...]
+
+    User->>User: Watches first video
+    User->>API: POST /watch { username: "tika", reel_id: "...", completed: true }
+    API->>Helix: recordWatch("tika", reel_id, ...)

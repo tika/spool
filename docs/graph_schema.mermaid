@@ -1,0 +1,49 @@
+---
+title: "Tidbit — Graph Schema"
+---
+erDiagram
+    Topic {
+        string slug UK "UNIQUE INDEX"
+        string title
+        string description
+        string status "generating | ready | extending"
+        string created_at
+    }
+
+    Concept {
+        string slug UK "UNIQUE INDEX"
+        string title
+        string description
+        int difficulty "1-10"
+        int order_hint
+        string status "no_video | generating | has_video"
+    }
+
+    Reel {
+        string reel_id UK "UNIQUE INDEX"
+        string title
+        string description
+        string transcript
+        string video_url "S3 URL"
+        string thumbnail_url
+        int duration_seconds
+        string source "ai_generated | uploaded"
+        string point "what does this teach"
+        string tone "casual | formal | funny | visual"
+        int difficulty "1-10"
+        float quality_score "0.0-1.0"
+        bool is_concise
+        bool is_high_level
+        string created_at
+    }
+
+    User {
+        string username UK "UNIQUE INDEX"
+        string display_name
+        string created_at
+    }
+
+    Topic ||--o{ Concept : "HasConcept"
+    Concept ||--o{ Concept : "Requires"
+    Reel }o--|| Concept : "Teaches [is_primary, relevance_score, angle]"
+    User }o--o{ Reel : "Watched [watched_at, duration, completed]"
