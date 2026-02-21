@@ -1,7 +1,12 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
+import { z } from "zod";
 import { CreateTopicSchema } from "../schemas/topic";
 import { topicService } from "../services/topic-service";
+
+const SlugParamSchema = z.object({
+	slug: z.string().min(1, "Slug is required").max(255),
+});
 
 export const topicsRoutes = new Hono()
 	.post("/", zValidator("json", CreateTopicSchema), async (c) => {
@@ -9,8 +14,9 @@ export const topicsRoutes = new Hono()
 		const result = await topicService.createTopic(title);
 		return c.json(result, 202);
 	})
-	.get("/:slug", async (c) => {
-		const topic = await topicService.getTopicBySlug(c.req.param("slug"));
+	.get("/:slug", zValidator("param", SlugParamSchema), async (c) => {
+		const { slug } = c.req.valid("param");
+		const topic = await topicService.getTopicBySlug(slug);
 		if (!topic) return c.json({ error: "Not found" }, 404);
 		return c.json({
 			slug: topic.slug,
