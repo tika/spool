@@ -6,7 +6,7 @@ import { getJob, updateJobStatus } from "../services/video-service";
 const VideoCompleteSchema = z.object({
 	jobId: z.string().min(1),
 	status: z.enum(["completed", "failed"]),
-	videoUrl: z.string().url().optional(),
+	videoUrl: z.url().optional(),
 	error: z.string().optional(),
 });
 
