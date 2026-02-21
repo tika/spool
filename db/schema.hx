@@ -31,14 +31,14 @@
 
 N::User {
     UNIQUE INDEX username: String,
-    created_at: Date,
+    created_at: Date DEFAULT NOW,
 }
 
 E::Watched {
     From: User,
     To: Reel,
     Properties: {
-        watched_at: Date,
+        watched_at: Date DEFAULT NOW,
         completed: Boolean,
     }
 }
@@ -56,14 +56,14 @@ N::Reel {
     tone: String,
     point: String,
     quality_score: U8, // 0-100
-    created_at: Date,
+    created_at: Date DEFAULT NOW,
 }
 
 N::Topic {
     UNIQUE INDEX slug: String,
     name: String,
     description: String,
-    created_at: Date,
+    created_at: Date DEFAULT NOW,
 }
 
 E::HasConcept {
