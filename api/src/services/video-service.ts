@@ -11,7 +11,7 @@ import { generateTTSWithCaptions } from "./tts-service";
 import { fetchStockMedia } from "./stock-media-service";
 import {
   uploadAudioToS3,
-  uploadVideoToR2,
+  uploadVideo,
   downloadToBuffer,
 } from "./storage-service";
 import { triggerRender, waitForRender } from "./remotion-service";
@@ -103,10 +103,10 @@ export async function generateVideo(job: VideoJob): Promise<string> {
       }
     );
 
-    // Step 8: Download rendered video and upload to R2
+    // Step 8: Download rendered video and upload to assets bucket
     updateJobStatus(job.id, "uploading", 90);
     const videoBuffer = await downloadToBuffer(outputUrl);
-    const videoUrl = await uploadVideoToR2(videoBuffer, input.conceptSlug);
+    const videoUrl = await uploadVideo(videoBuffer, input.conceptSlug);
 
     // Step 9: Complete
     updateJobStatus(job.id, "completed", 100, { videoUrl });

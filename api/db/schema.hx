@@ -34,63 +34,63 @@ N::User {
     created_at: Date DEFAULT NOW,
 }
 
-E::Watched {
-    From: User,
-    To: Reel,
-    Properties: {
-        watched_at: Date DEFAULT NOW,
-        completed: Boolean,
-    }
-}
+// E::Watched {
+//     From: User,
+//     To: Reel,
+//     Properties: {
+//         watched_at: Date DEFAULT NOW,
+//         completed: Boolean,
+//     }
+// }
 
-N::Reel {
-    name: String,
-    description: String,
-    transcript: String,
-    video_url: String,
-    thumbnail_url: String,
-    duration_seconds: U16, // in secoonds
-    source: String,
+// N::Reel {
+//     name: String,
+//     description: String,
+//     transcript: String,
+//     video_url: String,
+//     thumbnail_url: String,
+//     duration_seconds: U16, // in secoonds
+//     source: String,
 
-    // Metadata
-    tone: String,
-    point: String,
-    quality_score: U8, // 0-100
-    created_at: Date DEFAULT NOW,
-}
+//     // Metadata
+//     tone: String,
+//     point: String,
+//     quality_score: U8, // 0-100
+//     created_at: Date DEFAULT NOW,
+// }
 
-N::Topic {
-    UNIQUE INDEX slug: String,
-    name: String,
-    description: String,
-    created_at: Date DEFAULT NOW,
-}
+// N::Topic {
+//     UNIQUE INDEX slug: String,
+//     name: String,
+//     description: String,
+//     created_at: Date DEFAULT NOW,
+// }
 
-E::HasConcept {
-    From: Topic,
-    To: Concept,
-}
+// E::HasConcept {
+//     From: Topic,
+//     To: Concept,
+// }
 
-E::Teaches {
-    From: Reel,
-    To: Concept,
-    Properties: {
-        is_primary: Boolean,
-        relevance_score: U16,
-        context_description: String, // description of the concept that the reel teaches
-    }
-}
+// E::Teaches {
+//     From: Reel,
+//     To: Concept,
+//     Properties: {
+//         is_primary: Boolean,
+//         relevance_score: U16,
+//         context_description: String, // description of the concept that the reel teaches
+//     }
+// }
 
-N::Concept {
-    UNIQUE INDEX slug: String,
-    name: String,
-    description: String,
-    difficulty: U16, // 1-10
-    order_hint: U16,
-}
+// N::Concept {
+//     UNIQUE INDEX slug: String,
+//     name: String,
+//     description: String,
+//     difficulty: U16, // 1-10
+//     order_hint: U16,
+// }
 
-// Ensure this points the right way
-E::Requires {
-    From: Concept,
-    To: Concept,
-}
+// // Ensure this points the right way
+// E::Requires {
+//     From: Concept,
+//     To: Concept,
+// }

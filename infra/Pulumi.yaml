@@ -1,0 +1,3 @@
+name: unscroll-infra
+runtime: nodejs
+description: Unscroll video pipeline infrastructure (Remotion Lambda + Cloudflare R2)

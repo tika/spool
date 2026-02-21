@@ -2,102 +2,70 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
 
-// R2 client (S3-compatible)
-const r2Client = new S3Client({
-  region: "auto",
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
-  },
-});
-
-// AWS S3 client for Remotion assets
 const s3Client = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
+  region: process.env.AWS_REGION || "us-east-2",
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
   },
 });
 
-const R2_BUCKET = process.env.R2_BUCKET_NAME || "unscroll-videos";
-const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL || "";
-const S3_BUCKET = process.env.REMOTION_S3_BUCKET || "unscroll-remotion";
+const ASSETS_BUCKET = process.env.ASSETS_BUCKET || "unscroll-assets";
+const ASSETS_PUBLIC_URL =
+  process.env.ASSETS_PUBLIC_URL ||
+  `https://${ASSETS_BUCKET}.s3.${process.env.AWS_REGION || "us-east-2"}.amazonaws.com`;
 
 /**
- * Uploads a video to Cloudflare R2
+ * Uploads a finished video to the assets bucket
  * @returns Public URL of the uploaded video
  */
-export async function uploadVideoToR2(
+export async function uploadVideo(
   videoBuffer: Buffer,
-  conceptSlug: string
+  conceptSlug: string,
 ): Promise<string> {
   const key = `reels/${conceptSlug}/${randomUUID()}.mp4`;
 
-  await r2Client.send(
+  await s3Client.send(
     new PutObjectCommand({
-      Bucket: R2_BUCKET,
+      Bucket: ASSETS_BUCKET,
       Key: key,
       Body: videoBuffer,
       ContentType: "video/mp4",
-    })
+    }),
   );
 
-  return `${R2_PUBLIC_URL}/${key}`;
+  return `${ASSETS_PUBLIC_URL}/${key}`;
 }
 
 /**
- * Uploads audio to S3 for Remotion Lambda to access
- * @returns S3 URL of the uploaded audio
+ * Uploads audio to S3 for Remotion Lambda to access during rendering
+ * @returns Presigned URL valid for 1 hour
  */
 export async function uploadAudioToS3(
   audioBuffer: Buffer,
-  jobId: string
+  jobId: string,
 ): Promise<string> {
   const key = `render-assets/${jobId}/audio.mp3`;
 
   await s3Client.send(
     new PutObjectCommand({
-      Bucket: S3_BUCKET,
+      Bucket: ASSETS_BUCKET,
       Key: key,
       Body: audioBuffer,
       ContentType: "audio/mpeg",
-    })
+    }),
   );
 
-  // Generate a presigned URL valid for 1 hour
   const url = await getSignedUrl(
     s3Client,
     new GetObjectCommand({
-      Bucket: S3_BUCKET,
+      Bucket: ASSETS_BUCKET,
       Key: key,
     }),
-    { expiresIn: 3600 }
+    { expiresIn: 3600 },
   );
 
   return url;
-}
-
-/**
- * Uploads render props JSON to S3 for Remotion Lambda
- */
-export async function uploadRenderPropsToS3(
-  props: Record<string, unknown>,
-  jobId: string
-): Promise<string> {
-  const key = `render-assets/${jobId}/props.json`;
-
-  await s3Client.send(
-    new PutObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: key,
-      Body: JSON.stringify(props),
-      ContentType: "application/json",
-    })
-  );
-
-  return `s3://${S3_BUCKET}/${key}`;
 }
 
 /**

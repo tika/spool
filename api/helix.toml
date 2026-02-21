@@ -1,5 +1,6 @@
 [project]
-name = "api"
+id = "9d980748-7edc-4cc7-8baa-9a8902671cab"
+name = "unscroll"
 queries = "./db/"
 container_runtime = "docker"
 
@@ -7,6 +8,11 @@ container_runtime = "docker"
 port = 6969
 build_mode = "dev"
 
-[cloud]
+[cloud.Production.helix]
+cluster_id = "2aba3cc5-b703-4ec7-adb8-f86e66b9a6ad"
+region = "us-east-1"
+build_mode = "dev"
+
+[cloud.Production.helix.env_vars]
 
 [enterprise]
