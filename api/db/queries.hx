@@ -27,8 +27,9 @@ QUERY GetUser(user_id: ID) =>
     user <- N<User>(user_id)
     RETURN user
 
-QUERY CreateTopic(name: String, description: String) =>
+QUERY CreateTopic(slug: String, name: String, description: String) =>
     topic <- AddN<Topic>({
+        slug: slug,
         name: name,
         description: description,
     })
@@ -38,8 +39,9 @@ QUERY GetTopicBySlug(slug: String) =>
     topic <- N<Topic>({slug: slug})
     RETURN topic
 
-QUERY CreateConcept(name: String, description: String, difficulty: U16, order_hint: U16) =>
+QUERY CreateConcept(slug: String, name: String, description: String, difficulty: U16, order_hint: U16) =>
     concept <- AddN<Concept>({
+        slug: slug,
         name: name,
         description: description,
         difficulty: difficulty,
