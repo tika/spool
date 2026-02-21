@@ -104,14 +104,6 @@ QUERY AddRequires(concept_id: ID, prerequisite_concept_id: ID) =>
     edge <- AddE<Requires>::From(concept_id)::To(prerequisite_concept_id)
     RETURN edge
 
-QUERY AddWatched(user_id: ID, reel_id: ID, watched_at: Date, completed: Boolean) =>
-    edge <- AddE<Watched>({
-        watched_at: watched_at,
-        completed: completed,
-    })::From(user_id)::To(reel_id)
-    RETURN edge
-
-
 // Feed
 
 // getConceptGraph — all concepts for a topic + all Requires edges between them. This is what you topo-sort. You need both the nodes and the edges back.
