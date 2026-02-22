@@ -4,7 +4,9 @@
     "dev": "bun run --hot src/index.ts",
     "db:generate": "bunx drizzle-kit generate",
     "db:migrate": "bunx drizzle-kit migrate",
-    "db:studio": "bunx drizzle-kit studio"
+    "db:studio": "bunx drizzle-kit studio",
+    "import-videos": "bun run src/scripts/import-videos.ts",
+    "reencode-videos": "bun run src/scripts/reencode-videos.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.995.0",
