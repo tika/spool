@@ -44,7 +44,9 @@ final class AudioPlayerManager: ObservableObject {
         removeTimeObserver()
         let interval = CMTime(seconds: 0.05, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.currentPlaybackTime = time.seconds
+            DispatchQueue.main.async {
+                self?.currentPlaybackTime = time.seconds
+            }
         }
     }
 
@@ -52,7 +54,9 @@ final class AudioPlayerManager: ObservableObject {
         // If same URL and same view, just resume
         if url == currentURL && viewId == activeViewId {
             player?.play()
-            isPlaying = true
+            DispatchQueue.main.async { [weak self] in
+                self?.isPlaying = true
+            }
             return
         }
 
@@ -74,13 +78,17 @@ final class AudioPlayerManager: ObservableObject {
 
         addTimeObserver(to: newPlayer)
         newPlayer.play()
-        isPlaying = true
+        DispatchQueue.main.async { [weak self] in
+            self?.isPlaying = true
+        }
     }
 
     func pause(viewId: String) {
         guard viewId == activeViewId else { return }
         player?.pause()
-        isPlaying = false
+        DispatchQueue.main.async { [weak self] in
+            self?.isPlaying = false
+        }
     }
 
     func stop(viewId: String) {
@@ -89,10 +97,12 @@ final class AudioPlayerManager: ObservableObject {
         player?.pause()
         player?.removeAllItems()
         playerLooper?.disableLooping()
-        isPlaying = false
+        DispatchQueue.main.async { [weak self] in
+            self?.isPlaying = false
+            self?.currentPlaybackTime = 0
+        }
         activeViewId = nil
         currentURL = nil
-        currentPlaybackTime = 0
     }
 
     func seekToBeginning(viewId: String) {
@@ -105,10 +115,12 @@ final class AudioPlayerManager: ObservableObject {
         player?.pause()
         player?.removeAllItems()
         playerLooper?.disableLooping()
-        isPlaying = false
+        DispatchQueue.main.async { [weak self] in
+            self?.isPlaying = false
+            self?.currentPlaybackTime = 0
+        }
         activeViewId = nil
         currentURL = nil
-        currentPlaybackTime = 0
     }
 }
 
@@ -1705,28 +1717,16 @@ struct LearningView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 20)
 
-                    // YouTube video cards
+                    // YouTube video cards (topic-specific)
                     VStack(spacing: 12) {
-                        DeepDiveCard(
-                            title: "What Happens Inside a Black Hole?",
-                            channel: "Veritasium",
-                            duration: "18 min",
-                            thumbnailURL: "https://i.ytimg.com/vi/QqsLTNkzvaY/hqdefault.jpg"
-                        )
-
-                        DeepDiveCard(
-                            title: "Spaghettification Explained",
-                            channel: "PBS Space Time",
-                            duration: "12 min",
-                            thumbnailURL: "https://i.ytimg.com/vi/h1iJXOUMJpg/hqdefault.jpg"
-                        )
-
-                        DeepDiveCard(
-                            title: "Journey to the Event Horizon",
-                            channel: "Kurzgesagt",
-                            duration: "9 min",
-                            thumbnailURL: "https://i.ytimg.com/vi/ulCdoCfw-bY/hqdefault.jpg"
-                        )
+                        ForEach(deepDiveCards(for: topic.slug)) { card in
+                            DeepDiveCard(
+                                title: card.title,
+                                channel: card.channel,
+                                duration: card.duration,
+                                thumbnailURL: card.thumbnailURL
+                            )
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 40)
@@ -1775,6 +1775,86 @@ struct ActionBarButton: View {
             }
         }
         .scaleEffect(isActive ? 1.1 : 1.0)
+    }
+}
+
+// MARK: - Deep Dive Card Data
+
+private struct DeepDiveCardData: Identifiable {
+    var id: String { title }
+    let title: String
+    let channel: String
+    let duration: String
+    let thumbnailURL: String
+}
+
+private func deepDiveCards(for topicSlug: String) -> [DeepDiveCardData] {
+    switch topicSlug {
+    case "black-holes":
+        return [
+            DeepDiveCardData(
+                title: "What Happens Inside a Black Hole?",
+                channel: "Veritasium",
+                duration: "18 min",
+                thumbnailURL: "https://i.ytimg.com/vi/QqsLTNkzvaY/hqdefault.jpg"
+            ),
+            DeepDiveCardData(
+                title: "Spaghettification Explained",
+                channel: "PBS Space Time",
+                duration: "12 min",
+                thumbnailURL: "https://i.ytimg.com/vi/h1iJXOUMJpg/hqdefault.jpg"
+            ),
+            DeepDiveCardData(
+                title: "Journey to the Event Horizon",
+                channel: "Kurzgesagt",
+                duration: "9 min",
+                thumbnailURL: "https://i.ytimg.com/vi/ulCdoCfw-bY/hqdefault.jpg"
+            ),
+        ]
+    case "ancient-history":
+        return [
+            DeepDiveCardData(
+                title: "The Fall of Rome",
+                channel: "Historia Civilis",
+                duration: "15 min",
+                thumbnailURL: "https://i.ytimg.com/vi/3szfK1I7bgg/hqdefault.jpg"
+            ),
+            DeepDiveCardData(
+                title: "Ancient Egypt: Mysteries of the Pharaohs",
+                channel: "CrashCourse",
+                duration: "11 min",
+                thumbnailURL: "https://i.ytimg.com/vi/Z3Wvw6BivVI/hqdefault.jpg"
+            ),
+            DeepDiveCardData(
+                title: "The Bronze Age Collapse",
+                channel: "Fall of Civilizations",
+                duration: "22 min",
+                thumbnailURL: "https://i.ytimg.com/vi/BxqpdToY0Hg/hqdefault.jpg"
+            ),
+        ]
+    case "linear-algebra":
+        return [
+            DeepDiveCardData(
+                title: "Essence of Linear Algebra",
+                channel: "3Blue1Brown",
+                duration: "10 min",
+                thumbnailURL: "https://i.ytimg.com/vi/fNk_zzaMoSs/hqdefault.jpg"
+            ),
+            DeepDiveCardData(
+                title: "Matrix Multiplication Visualized",
+                channel: "Zach Star",
+                duration: "8 min",
+                thumbnailURL: "https://i.ytimg.com/vi/2spTnAiQg4M/hqdefault.jpg"
+            ),
+            DeepDiveCardData(
+                title: "Eigenvectors and Eigenvalues",
+                channel: "Khan Academy",
+                duration: "12 min",
+                thumbnailURL: "https://i.ytimg.com/vi/PhfbEr2btGQ/hqdefault.jpg"
+            ),
+        ]
+    default:
+        return []
     }
 }
 
@@ -2039,6 +2119,7 @@ struct CaptionOverlayView: View {
     var body: some View {
         VStack(spacing: 12) {
             Spacer()
+                .frame(minHeight: 200)
 
             FlowLayout(spacing: 8) {
                 ForEach(Array(visibleWords.enumerated()), id: \.offset) { _, item in
@@ -2052,7 +2133,7 @@ struct CaptionOverlayView: View {
             .frame(maxWidth: .infinity)
 
             Spacer()
-                .frame(height: 120)
+                .frame(height: 150)
         }
     }
 }

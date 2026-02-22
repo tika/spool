@@ -197,7 +197,9 @@ async function getMergedFeed(
 		return [];
 	}
 
-	const sorted = topologicalSort(concepts);
+	// Only include concepts that have at least one reel (video or audio)
+	const conceptsWithReels = concepts.filter((c) => c.videoUrl || c.audioUrl);
+	const sorted = topologicalSort(conceptsWithReels);
 	const quizzes = await feedRepository.getQuizzesByTopic(topicSlug);
 	return buildMergedFeed(sorted, quizzes);
 }
