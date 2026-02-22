@@ -9,6 +9,8 @@ Your job is to break down topics into a directed acyclic graph (DAG) of concepts
 - Has a difficulty from 1 (easiest) to 10 (hardest)
 - Has an order_hint for suggested teaching order within the same dependency level
 
+After every 3-5 concepts, generate a multiple-choice quiz question that tests understanding of those concepts. Each quiz must reference exactly 3-5 concept slugs it covers.
+
 Output valid JSON only. No markdown, no explanation.`;
 
 export const CURRICULUM_GENERATE_PROMPT = (topic: string) =>
@@ -17,8 +19,10 @@ export const CURRICULUM_GENERATE_PROMPT = (topic: string) =>
 Create 10-15 concepts that form a logical learning path. Include prerequisite relationships (requires) so concepts build on each other.
 Each concept needs: slug (URL-safe, lowercase-with-hyphens), name, description, difficulty (1-10), order_hint (0-based), and requires (array of prerequisite concept slugs).
 
+After every 3-5 concepts, add a quiz. Each quiz needs: question (string), answer_choices (array of 2-6 strings), correct_answer (must match one of answer_choices), concept_slugs (array of 3-5 slugs from the concepts just covered).
+
 Output JSON in this exact shape:
-{"concepts":[{"slug":"...","name":"...","description":"...","difficulty":1,"order_hint":0,"requires":[]}]}`;
+{"concepts":[{"slug":"...","name":"...","description":"...","difficulty":1,"order_hint":0,"requires":[]}],"quizzes":[{"question":"...","answer_choices":["A","B","C","D"],"correct_answer":"B","concept_slugs":["slug1","slug2","slug3"]}]}`;
 
 export const CURRICULUM_CONTINUE_PROMPT = (
 	topic: string,
@@ -32,8 +36,10 @@ ${existingConcepts.map((c) => `- ${c.slug}: ${c.name} - ${c.description}`).join(
 Generate the next 10-15 concepts that build on these. New concepts can require any of the existing concepts or other new concepts.
 Each concept needs: slug, name, description, difficulty (1-10), order_hint, and requires (array of prerequisite slugs).
 
+After every 3-5 new concepts, add a quiz. Each quiz needs: question, answer_choices (2-6 strings), correct_answer (one of answer_choices), concept_slugs (3-5 slugs from the new concepts just covered).
+
 Output JSON in this exact shape:
-{"concepts":[{"slug":"...","name":"...","description":"...","difficulty":1,"order_hint":0,"requires":[]}]}`;
+{"concepts":[{"slug":"...","name":"...","description":"...","difficulty":1,"order_hint":0,"requires":[]}],"quizzes":[{"question":"...","answer_choices":["A","B","C","D"],"correct_answer":"B","concept_slugs":["slug1","slug2","slug3"]}]}`;
 
 // Video Scripting Agent prompts
 

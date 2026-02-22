@@ -7,6 +7,7 @@ import {
   boolean,
   smallint,
   primaryKey,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -39,6 +40,7 @@ export const topics = pgTable("topics", {
 
 export const topicsRelations = relations(topics, ({ many }) => ({
   concepts: many(concepts),
+  quizzes: many(quizzes),
 }));
 
 // ============================================================================
@@ -66,6 +68,7 @@ export const conceptsRelations = relations(concepts, ({ one, many }) => ({
   reels: many(reels),
   prerequisites: many(conceptPrerequisites, { relationName: "concept" }),
   dependents: many(conceptPrerequisites, { relationName: "prerequisite" }),
+  quizConcepts: many(quizConcepts),
 }));
 
 // ============================================================================
@@ -133,6 +136,61 @@ export const conceptPrerequisitesRelations = relations(
 );
 
 // ============================================================================
+// QUIZZES
+// ============================================================================
+
+export const quizzes = pgTable("quizzes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  topicId: uuid("topic_id")
+    .notNull()
+    .references(() => topics.id, { onDelete: "cascade" }),
+  question: text("question").notNull(),
+  correctAnswer: varchar("correct_answer", { length: 500 }).notNull(),
+  answerChoices: jsonb("answer_choices").$type<string[]>().notNull(),
+  orderIndex: smallint("order_index").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const quizzesRelations = relations(quizzes, ({ one, many }) => ({
+  topic: one(topics, {
+    fields: [quizzes.topicId],
+    references: [topics.id],
+  }),
+  quizConcepts: many(quizConcepts),
+}));
+
+// ============================================================================
+// QUIZ CONCEPTS (junction table: quiz covers 3-5 concepts)
+// ============================================================================
+
+export const quizConcepts = pgTable(
+  "quiz_concepts",
+  {
+    quizId: uuid("quiz_id")
+      .notNull()
+      .references(() => quizzes.id, { onDelete: "cascade" }),
+    conceptId: uuid("concept_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+  },
+  (table) => [primaryKey({ columns: [table.quizId, table.conceptId] })]
+);
+
+export const quizConceptsRelations = relations(
+  quizConcepts,
+  ({ one }) => ({
+    quiz: one(quizzes, {
+      fields: [quizConcepts.quizId],
+      references: [quizzes.id],
+    }),
+    concept: one(concepts, {
+      fields: [quizConcepts.conceptId],
+      references: [concepts.id],
+    }),
+  })
+);
+
+// ============================================================================
 // USER WATCHED (tracking watch history)
 // ============================================================================
 
@@ -180,3 +238,6 @@ export type NewReel = typeof reels.$inferInsert;
 
 export type UserWatched = typeof userWatched.$inferSelect;
 export type NewUserWatched = typeof userWatched.$inferInsert;
+
+export type Quiz = typeof quizzes.$inferSelect;
+export type NewQuiz = typeof quizzes.$inferInsert;

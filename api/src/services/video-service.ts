@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import { generateScript } from "../agents/video-scripting-agent";
 import { formatError } from "../lib/errors";
 import { log } from "../lib/logger";
@@ -27,10 +28,9 @@ import { fetchStockMedia } from "./stock-media-service";
 import {
 	uploadAudioToS3,
 	uploadVideo,
-	downloadToBuffer,
 	ensurePresignedUrlForAssets,
 } from "./storage-service";
-import { triggerRender, waitForRender } from "./remotion-service";
+import { renderWithRevideo } from "./revideo-render-service";
 import { randomUUID } from "crypto";
 
 // In-memory job store (replace with Redis/DB in production)
@@ -178,25 +178,25 @@ export async function generateVideo(job: VideoJob): Promise<string> {
 			gradientColors: BACKGROUND_GRADIENT_COLORS[backgroundType],
 		};
 
-		// Step 6: Trigger Remotion Lambda render
-		jobLog.debug("Step 6/7: Rendering video");
+		// Step 5: Render video with Revideo
+		jobLog.debug("Step 5/6: Rendering video");
 		const renderStart = Date.now();
-		const { renderId, bucketName } = await triggerRender(renderInput);
-		jobLog.debug("Render triggered", { renderId, bucketName });
-
-		// Step 7: Wait for render to complete
-		const outputUrl = await waitForRender(renderId, bucketName, (progress) => {
+		const outputPath = await renderWithRevideo(renderInput, job.id, (progress) => {
 			updateJobStatus(job.id, "rendering", 50 + Math.round(progress * 0.35));
 		});
 		jobLog.debug("Render completed", {
 			durationMs: Date.now() - renderStart,
+			outputPath,
 		});
 
-		// Step 8: Download rendered video and upload to assets bucket
-		jobLog.debug("Step 7/7: Uploading final video");
+		// Step 6: Upload rendered video to assets bucket
+		jobLog.debug("Step 6/6: Uploading final video");
 		updateJobStatus(job.id, "uploading", 90);
-		const videoBuffer = await downloadToBuffer(outputUrl);
+		const videoBuffer = await fs.promises.readFile(outputPath);
 		const videoUrl = await uploadVideo(videoBuffer, input.conceptSlug);
+
+		// Clean up temp file
+		await fs.promises.unlink(outputPath).catch(() => {});
 
 		// Save reel to database
 		jobLog.debug("Saving reel to database");

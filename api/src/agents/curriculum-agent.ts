@@ -19,14 +19,30 @@ const ConceptSchema = z.object({
 	requires: z.array(z.string()),
 });
 
+const QuizSchema = z
+	.object({
+		question: z.string(),
+		answer_choices: z.array(z.string()).min(2).max(6),
+		correct_answer: z.string(),
+		concept_slugs: z.array(z.string()).min(3).max(5),
+	})
+	.refine((data) => data.answer_choices.includes(data.correct_answer), {
+		message: "correct_answer must be one of the answer_choices",
+		path: ["correct_answer"],
+	});
+
 const CurriculumOutputSchema = z.object({
 	concepts: z.array(ConceptSchema),
+	quizzes: z.array(QuizSchema).optional(),
 });
 
 export type ConceptInfo = z.infer<typeof ConceptSchema>;
 
+export type QuizInfo = z.infer<typeof QuizSchema>;
+
 export type CurriculumResult = {
 	concepts: ConceptInfo[];
+	quizzes?: QuizInfo[];
 };
 
 function parseJsonResponse(text: string): unknown {
@@ -69,6 +85,7 @@ export async function generateCurriculum(
 		log.curriculum.info("Curriculum generated successfully", {
 			topic,
 			concepts: validated.concepts.length,
+			quizzes: validated.quizzes?.length ?? 0,
 			durationMs: Date.now() - startTime,
 		});
 
@@ -122,6 +139,7 @@ export async function continueCurriculum(
 		log.curriculum.info("Curriculum continuation complete", {
 			topic,
 			newConcepts: validated.concepts.length,
+			quizzes: validated.quizzes?.length ?? 0,
 			durationMs: Date.now() - startTime,
 		});
 

@@ -9,7 +9,20 @@ import type { Job, ConceptToGenerate } from "./types";
 const INITIAL_VIDEO_BATCH_SIZE = 5;
 
 export interface TopicRepositoryForWorker {
-	saveConcepts(topicSlug: string, concepts: ConceptInfo[]): Promise<void>;
+	saveConcepts(
+		topicSlug: string,
+		concepts: ConceptInfo[],
+	): Promise<Map<string, string>>;
+	saveQuizzes(
+		topicSlug: string,
+		quizzes: Array<{
+			question: string;
+			answer_choices: string[];
+			correct_answer: string;
+			concept_slugs: string[];
+		}>,
+		slugToConceptId: Map<string, string>,
+	): Promise<void>;
 	updateTopicStatus(slug: string, status: string): Promise<void>;
 	getConceptsByTopic(
 		topicSlug: string
@@ -42,7 +55,21 @@ async function processCurriculumJob(
 		jobLog.debug("Saving concepts to database", {
 			count: result.concepts.length,
 		});
-		await deps.topicRepository.saveConcepts(job.topicSlug, result.concepts);
+		const slugToId = await deps.topicRepository.saveConcepts(
+			job.topicSlug,
+			result.concepts,
+		);
+
+		if (result.quizzes?.length) {
+			jobLog.debug("Saving quizzes to database", {
+				count: result.quizzes.length,
+			});
+			await deps.topicRepository.saveQuizzes(
+				job.topicSlug,
+				result.quizzes,
+				slugToId,
+			);
+		}
 
 		await deps.topicRepository.updateTopicStatus(job.topicSlug, "ready");
 		jobLog.info("Curriculum job completed", {

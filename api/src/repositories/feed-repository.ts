@@ -1,5 +1,13 @@
-import { eq } from "drizzle-orm";
-import { db, concepts, conceptPrerequisites, topics, reels } from "../db";
+import { and, eq, inArray } from "drizzle-orm";
+import {
+	db,
+	concepts,
+	conceptPrerequisites,
+	topics,
+	reels,
+	quizzes,
+	quizConcepts,
+} from "../db";
 
 export interface ConceptWithPrereqs {
 	id: string;
@@ -10,6 +18,14 @@ export interface ConceptWithPrereqs {
 	orderIndex: number;
 	prerequisiteIds: string[];
 	videoUrl: string | null;
+}
+
+export interface QuizWithConcepts {
+	id: string;
+	question: string;
+	answerChoices: string[];
+	correctAnswer: string;
+	conceptIds: string[];
 }
 
 export class FeedRepository {
@@ -95,6 +111,100 @@ export class FeedRepository {
 			prerequisiteIds: prereqMap.get(c.id) || [],
 			videoUrl: reelMap.get(c.id) ?? null,
 		}));
+	}
+
+	async getQuizzesByTopic(topicSlug: string): Promise<QuizWithConcepts[]> {
+		const [topic] = await db
+			.select({ id: topics.id })
+			.from(topics)
+			.where(eq(topics.slug, topicSlug))
+			.limit(1);
+
+		if (!topic) return [];
+
+		const quizRows = await db
+			.select({
+				id: quizzes.id,
+				question: quizzes.question,
+				answerChoices: quizzes.answerChoices,
+				correctAnswer: quizzes.correctAnswer,
+			})
+			.from(quizzes)
+			.where(eq(quizzes.topicId, topic.id))
+			.orderBy(quizzes.orderIndex);
+
+		if (quizRows.length === 0) return [];
+
+		const quizIds = quizRows.map((q) => q.id);
+		const qcAllRows = await db
+			.select({
+				quizId: quizConcepts.quizId,
+				conceptId: quizConcepts.conceptId,
+			})
+			.from(quizConcepts)
+			.where(inArray(quizConcepts.quizId, quizIds));
+
+		const quizIdSet = new Set(quizIds);
+		const conceptMap = new Map<string, string[]>();
+		for (const row of qcAllRows) {
+			if (quizIdSet.has(row.quizId)) {
+				const existing = conceptMap.get(row.quizId) || [];
+				existing.push(row.conceptId);
+				conceptMap.set(row.quizId, existing);
+			}
+		}
+
+		return quizRows.map((q) => ({
+			id: q.id,
+			question: q.question,
+			answerChoices: (q.answerChoices ?? []) as string[],
+			correctAnswer: q.correctAnswer,
+			conceptIds: conceptMap.get(q.id) || [],
+		}));
+	}
+
+	async getQuizById(
+		topicSlug: string,
+		quizId: string,
+	): Promise<QuizWithConcepts | null> {
+		const [topic] = await db
+			.select({ id: topics.id })
+			.from(topics)
+			.where(eq(topics.slug, topicSlug))
+			.limit(1);
+
+		if (!topic) return null;
+
+		const [quiz] = await db
+			.select({
+				id: quizzes.id,
+				question: quizzes.question,
+				answerChoices: quizzes.answerChoices,
+				correctAnswer: quizzes.correctAnswer,
+			})
+			.from(quizzes)
+			.where(
+				and(
+					eq(quizzes.topicId, topic.id),
+					eq(quizzes.id, quizId),
+				),
+			)
+			.limit(1);
+
+		if (!quiz) return null;
+
+		const qcRows = await db
+			.select({ conceptId: quizConcepts.conceptId })
+			.from(quizConcepts)
+			.where(eq(quizConcepts.quizId, quiz.id));
+
+		return {
+			id: quiz.id,
+			question: quiz.question,
+			answerChoices: (quiz.answerChoices ?? []) as string[],
+			correctAnswer: quiz.correctAnswer,
+			conceptIds: qcRows.map((r) => r.conceptId),
+		};
 	}
 }
 

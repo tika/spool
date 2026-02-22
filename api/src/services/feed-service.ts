@@ -2,16 +2,26 @@ import { log } from "../lib/logger";
 import {
 	feedRepository,
 	type ConceptWithPrereqs,
+	type QuizWithConcepts,
 } from "../repositories/feed-repository";
 import { topicRepository } from "../repositories/topic-repository";
 
-export interface FeedItem {
-	conceptSlug: string;
-	conceptName: string;
-	conceptDescription: string;
-	difficulty: number;
-	videoUrl: string | null;
-}
+export type FeedItem =
+	| {
+			type: "reel";
+			conceptSlug: string;
+			conceptName: string;
+			conceptDescription: string;
+			difficulty: number;
+			videoUrl: string | null;
+	  }
+	| {
+			type: "quiz";
+			quizId: string;
+			question: string;
+			answerChoices: string[];
+			correctAnswer: string;
+	  };
 
 export interface FeedItemResult {
 	item: FeedItem;
@@ -87,6 +97,7 @@ function topologicalSort(concepts: ConceptWithPrereqs[]): ConceptWithPrereqs[] {
 
 function conceptToFeedItem(c: ConceptWithPrereqs): FeedItem {
 	return {
+		type: "reel",
 		conceptSlug: c.slug,
 		conceptName: c.name,
 		conceptDescription: c.description,
@@ -95,9 +106,53 @@ function conceptToFeedItem(c: ConceptWithPrereqs): FeedItem {
 	};
 }
 
-async function getSortedConcepts(
+function quizToFeedItem(q: QuizWithConcepts): FeedItem {
+	return {
+		type: "quiz",
+		quizId: q.id,
+		question: q.question,
+		answerChoices: q.answerChoices,
+		correctAnswer: q.correctAnswer,
+	};
+}
+
+function buildMergedFeed(
+	sortedConcepts: ConceptWithPrereqs[],
+	quizzes: QuizWithConcepts[],
+): FeedItem[] {
+	const conceptIdToIndex = new Map<string, number>();
+	for (let i = 0; i < sortedConcepts.length; i++) {
+		conceptIdToIndex.set(sortedConcepts[i].id, i);
+	}
+
+	const quizzesByInsertIndex = new Map<number, QuizWithConcepts[]>();
+	for (const quiz of quizzes) {
+		let maxIndex = -1;
+		for (const cid of quiz.conceptIds) {
+			const idx = conceptIdToIndex.get(cid);
+			if (idx !== undefined && idx > maxIndex) maxIndex = idx;
+		}
+		if (maxIndex >= 0) {
+			const existing = quizzesByInsertIndex.get(maxIndex) || [];
+			existing.push(quiz);
+			quizzesByInsertIndex.set(maxIndex, existing);
+		}
+	}
+
+	const result: FeedItem[] = [];
+	for (let i = 0; i < sortedConcepts.length; i++) {
+		result.push(conceptToFeedItem(sortedConcepts[i]));
+		const quizzesAfter = quizzesByInsertIndex.get(i) || [];
+		for (const q of quizzesAfter) {
+			result.push(quizToFeedItem(q));
+		}
+	}
+	return result;
+}
+
+async function getMergedFeed(
 	topicSlug: string,
-): Promise<ConceptWithPrereqs[] | null> {
+): Promise<FeedItem[] | null> {
 	const topic = await topicRepository.getTopicBySlug(topicSlug);
 	if (!topic || topic.status !== "ready") {
 		return null;
@@ -108,7 +163,9 @@ async function getSortedConcepts(
 		return [];
 	}
 
-	return topologicalSort(concepts);
+	const sorted = topologicalSort(concepts);
+	const quizzes = await feedRepository.getQuizzesByTopic(topicSlug);
+	return buildMergedFeed(sorted, quizzes);
 }
 
 export const feedService = {
@@ -118,21 +175,20 @@ export const feedService = {
 		cursor: number,
 		direction: "next" | "prev",
 	): Promise<FeedItemResult | null> {
-		const sorted = await getSortedConcepts(topicSlug);
-		if (!sorted || sorted.length === 0) {
+		const items = await getMergedFeed(topicSlug);
+		if (!items || items.length === 0) {
 			return null;
 		}
 
-		// Calculate target index based on direction
 		const targetIndex =
 			direction === "next" ? cursor : Math.max(0, cursor - 1);
 
-		if (targetIndex < 0 || targetIndex >= sorted.length) {
+		if (targetIndex < 0 || targetIndex >= items.length) {
 			return null;
 		}
 
-		const concept = sorted[targetIndex];
-		const hasNext = targetIndex + 1 < sorted.length;
+		const item = items[targetIndex];
+		const hasNext = targetIndex + 1 < items.length;
 		const hasPrev = targetIndex > 0;
 
 		log.api.debug("Feed item", {
@@ -140,11 +196,11 @@ export const feedService = {
 			direction,
 			cursor,
 			targetIndex,
-			conceptSlug: concept.slug,
+			itemType: item.type,
 		});
 
 		return {
-			item: conceptToFeedItem(concept),
+			item,
 			cursor: targetIndex,
 			hasNext,
 			hasPrev,
@@ -154,8 +210,8 @@ export const feedService = {
 	async getFeed(topicSlug: string, _username: string): Promise<FeedItem[]> {
 		const startTime = Date.now();
 
-		const sorted = await getSortedConcepts(topicSlug);
-		if (!sorted) {
+		const items = await getMergedFeed(topicSlug);
+		if (!items) {
 			log.api.debug("Feed requested for unknown/non-ready topic", {
 				topicSlug,
 			});
@@ -164,10 +220,10 @@ export const feedService = {
 
 		log.api.info("Feed generated", {
 			topicSlug,
-			concepts: sorted.length,
+			items: items.length,
 			durationMs: Date.now() - startTime,
 		});
 
-		return sorted.map(conceptToFeedItem);
+		return items;
 	},
 };
