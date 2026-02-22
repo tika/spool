@@ -179,9 +179,16 @@ struct FeedResponse: Codable {
     }
 }
 
-enum FeedItem: Codable {
+enum FeedItem: Codable, Identifiable {
     case reel(ReelItem)
     case quiz(QuizItem)
+
+    var id: String {
+        switch self {
+        case .reel(let r): return r.id
+        case .quiz(let q): return q.id
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -468,47 +475,63 @@ struct TabBarButton: View {
     }
 }
 
+// MARK: - Hardcoded Topics
+
+private let allTopicsHardcoded: [Topic] = [
+    Topic(
+        id: "22b753f0-2014-43ee-b6f8-2d2e8f298369",
+        title: "Matrices",
+        slug: "matricies",
+        subtitle: "55 concepts discovered",
+        gradient: [
+            Color(red: 0.55, green: 0.48, blue: 0.58),
+            Color(red: 0.48, green: 0.40, blue: 0.52),
+        ],
+        status: "ready"
+    ),
+    Topic(
+        id: "9e5ec12b-25dc-48cd-a06b-0b6bb5508ff5",
+        title: "Ancient History",
+        slug: "ancient-history",
+        subtitle: "120 concepts discovered",
+        gradient: [
+            Color(red: 0.92, green: 0.85, blue: 0.75),
+            Color(red: 0.88, green: 0.80, blue: 0.68),
+        ],
+        status: "ready"
+    ),
+    Topic(
+        id: "eadffabe-28f4-4cb9-8a8e-039b7754e711",
+        title: "Black Holes",
+        slug: "black-holes",
+        subtitle: "47 concepts discovered",
+        gradient: [
+            Color(red: 0.38, green: 0.48, blue: 0.58),
+            Color(red: 0.32, green: 0.40, blue: 0.50),
+        ],
+        status: "ready"
+    ),
+]
+
 // MARK: - Learn View
 
 struct LearnView: View {
     let onStartLearning: (Topic) -> Void
 
     @State private var expandedTopicID: String?
-    @State private var allTopics: [Topic] = []
-    @State private var visibleTopics: [Topic] = []
-    @State private var loadingTopic: Topic?
-    @State private var isLoading = true
-    @State private var loadError: String?
+    @State private var visibleTopics: [Topic] = [allTopicsHardcoded[0]]
+    @State private var showAddTopicSheet = false
 
     private var availableTopics: [Topic] {
-        let visibleSlugs = Set(visibleTopics.map(\.slug))
-        return allTopics.filter { !visibleSlugs.contains($0.slug) }
+        let visibleIds = Set(visibleTopics.map(\.id))
+        return allTopicsHardcoded.filter { !visibleIds.contains($0.id) }
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 20) {
                 headerView
 
-                if isLoading {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                            .scaleEffect(1.2)
-                            .padding(.vertical, 40)
-                        Spacer()
-                    }
-                } else if let error = loadError {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                        Text(error)
-                            .font(.system(size: 15, design: .rounded))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-                } else {
                 ForEach(visibleTopics) { topic in
                     let isExpanded = expandedTopicID == topic.id
 
@@ -520,50 +543,37 @@ struct LearnView: View {
                         }
                     )
                     .transition(.asymmetric(
-                        insertion: .scale(scale: 0.9).combined(with: .opacity),
+                        insertion: .scale(scale: 0.96).combined(with: .opacity),
                         removal: .opacity
                     ))
                     .onTapGesture {
-                        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                             expandedTopicID = isExpanded ? nil : topic.id
                         }
                     }
                 }
 
-                if let topic = loadingTopic {
-                    LoadingCardView(topic: topic)
-                        .transition(.scale(scale: 0.95).combined(with: .opacity))
-                }
-
-                if loadingTopic == nil {
-                    addTopicSection
-                }
-                }
+                addTopicSection
             }
             .padding(.horizontal, 20)
-            .padding(.top, 8)
+            .padding(.top, 12)
             .padding(.bottom, 20)
         }
-        .task {
-            await loadTopics()
-        }
-    }
-
-    private func loadTopics() async {
-        isLoading = true
-        loadError = nil
-        do {
-            let topics = try await FeedService.shared.fetchTopics()
-            let readyTopics = topics.filter { $0.status == "ready" }
-            allTopics = readyTopics
-            if visibleTopics.isEmpty {
-                visibleTopics = readyTopics
-                expandedTopicID = readyTopics.first?.id
+        .background(Color(red: 0.98, green: 0.97, blue: 0.95))
+        .onAppear {
+            if expandedTopicID == nil {
+                expandedTopicID = visibleTopics.first?.id
             }
-        } catch {
-            loadError = "Could not load topics"
         }
-        isLoading = false
+        .sheet(isPresented: $showAddTopicSheet) {
+            AddTopicSheet(
+                topics: availableTopics,
+                onAdd: { topic in
+                    showAddTopicSheet = false
+                    addTopic(topic)
+                }
+            )
+        }
     }
 
     private var headerView: some View {
@@ -581,58 +591,57 @@ struct LearnView: View {
     private var addTopicSection: some View {
         Group {
             if availableTopics.isEmpty {
-                HStack {
-                    Image(systemName: "checkmark.circle")
-                        .font(.system(size: 16))
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Color(red: 0.35, green: 0.65, blue: 0.45))
                     Text("All topics added")
                         .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color(red: 0.45, green: 0.43, blue: 0.40))
                 }
-                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
+                .padding(.vertical, 20)
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(0.8))
+                }
             } else {
-                Menu {
-                    ForEach(availableTopics) { topic in
-                        Button {
-                            addTopic(topic)
-                        } label: {
-                            Label(topic.title, systemImage: "plus.circle")
-                        }
-                    }
+                Button {
+                    showAddTopicSheet = true
                 } label: {
-                    HStack {
-                        Image(systemName: "plus.circle")
-                            .font(.system(size: 17, weight: .medium))
+                    HStack(spacing: 10) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 20))
                         Text("Add Topic")
                             .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
                     }
-                    .foregroundStyle(Color(red: 0.55, green: 0.50, blue: 0.38))
+                    .foregroundStyle(Color(red: 0.55, green: 0.48, blue: 0.38))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
                     .background {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(
-                                Color(red: 0.55, green: 0.50, blue: 0.38).opacity(0.4),
-                                style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
-                            )
+                            .fill(Color.white)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .strokeBorder(
+                                        Color(red: 0.75, green: 0.70, blue: 0.62).opacity(0.6),
+                                        lineWidth: 1
+                                    )
+                            }
+                            .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
                     }
                 }
-                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
             }
         }
     }
 
     private func addTopic(_ topic: Topic) {
-        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
-            loadingTopic = topic
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
-                loadingTopic = nil
-                visibleTopics.append(topic)
-            }
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+            visibleTopics.append(topic)
+            expandedTopicID = topic.id
         }
     }
 }
@@ -1167,20 +1176,31 @@ struct TopicCardView: View {
                     Button {
                         onStartLearning?()
                     } label: {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 10) {
                             Image(systemName: "play.fill")
-                                .font(.system(size: 14))
+                                .font(.system(size: 15, weight: .semibold))
                             Text("Start Learning")
-                                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                .font(.system(size: 17, weight: .semibold, design: .rounded))
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, 16)
                         .background {
                             Capsule()
-                                .fill(Color(red: 0.30, green: 0.28, blue: 0.22))
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.35, green: 0.32, blue: 0.28),
+                                            Color(red: 0.28, green: 0.25, blue: 0.22),
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
                         }
                     }
+                    .buttonStyle(.plain)
                     .transition(.opacity.combined(with: .offset(y: 8)))
                 }
             }
@@ -1196,8 +1216,16 @@ struct TopicCardView: View {
                         endPoint: .bottomLeading
                     )
                 )
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(
+                            Color.white.opacity(isExpanded ? 0.25 : 0.15),
+                            lineWidth: 1
+                        )
+                }
+                .shadow(color: .black.opacity(isExpanded ? 0.12 : 0.06), radius: isExpanded ? 16 : 8, y: 4)
                 .colorEffect(
-                    ShaderLibrary.grainNoise(.float(0.15))
+                    ShaderLibrary.grainNoise(.float(0.12))
                 )
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -1339,8 +1367,8 @@ class FeedViewModel: ObservableObject {
 
             if let item = response.item {
                 // Only add if not already present
-                let existingIds = Set(items.compactMap { feedItemId($0) })
-                if !existingIds.contains(feedItemId(item)) {
+                let existingIds = Set(items.map(\.id))
+                if !existingIds.contains(item.id) {
                     items.append(item)
                 }
                 hasNext = response.hasNext
@@ -1394,8 +1422,8 @@ class FeedViewModel: ObservableObject {
                 }
 
                 if let item = response.item {
-                    let existingIds = Set(items.compactMap { feedItemId($0) })
-                    if !existingIds.contains(feedItemId(item)) {
+                    let existingIds = Set(items.map(\.id))
+                    if !existingIds.contains(item.id) {
                         items.append(item)
                         hasNext = response.hasNext
                         if !response.hasNext {
@@ -1413,13 +1441,6 @@ class FeedViewModel: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
         isPollingForMore = false
-    }
-
-    private func feedItemId(_ item: FeedItem) -> String {
-        switch item {
-        case .reel(let reel): return reel.id
-        case .quiz(let quiz): return quiz.id
-        }
     }
 }
 
@@ -1444,7 +1465,7 @@ struct LearningView: View {
     }
 
     private var currentItem: FeedItem? {
-        viewModel.items.first { feedItemId($0) == currentItemID }
+        viewModel.items.first { $0.id == currentItemID }
     }
 
     private var currentItemLabel: String {
@@ -1469,11 +1490,10 @@ struct LearningView: View {
                 // Scrolling video/quiz pages
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.items.enumerated()), id: \.offset) { index, item in
-                            let itemId = feedItemId(item)
-                            FeedItemPageView(item: item, isCurrentItem: currentItemID == itemId)
+                        ForEach(Array(viewModel.items.enumerated()), id: \.element.id) { index, item in
+                            FeedItemPageView(item: item, isCurrentItem: currentItemID == item.id)
                                 .containerRelativeFrame(.vertical)
-                                .id(itemId)
+                                .id(item.id)
                                 .onAppear {
                                     viewModel.onScrolledTo(index: index)
                                 }
@@ -1494,13 +1514,13 @@ struct LearningView: View {
                 .onAppear {
                     // Set initial current item if not set
                     if currentItemID == nil, let firstItem = viewModel.items.first {
-                        currentItemID = feedItemId(firstItem)
+                        currentItemID = firstItem.id
                     }
                 }
                 .onChange(of: viewModel.items.count) { _, count in
                     // Set initial current item when items load
                     if currentItemID == nil, count > 0, let firstItem = viewModel.items.first {
-                        currentItemID = feedItemId(firstItem)
+                        currentItemID = firstItem.id
                     }
                 }
                 .onDisappear {
@@ -1536,7 +1556,10 @@ struct LearningView: View {
                             .foregroundStyle(.white.opacity(0.6))
                             .contentTransition(.numericText())
                             .animation(.easeInOut(duration: 0.3), value: currentItemID)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
                     }
+                    .padding(.horizontal, 72)
 
                     HStack {
                         Button {
@@ -1594,7 +1617,7 @@ struct LearningView: View {
         .task {
             await viewModel.loadInitial()
             if let firstItem = viewModel.items.first {
-                currentItemID = feedItemId(firstItem)
+                currentItemID = firstItem.id
             }
         }
         .onDisappear {
@@ -1724,7 +1747,8 @@ struct LearningView: View {
                                 title: card.title,
                                 channel: card.channel,
                                 duration: card.duration,
-                                thumbnailURL: card.thumbnailURL
+                                thumbnailURL: card.thumbnailURL,
+                                youtubeURL: card.youtubeURL
                             )
                         }
                     }
@@ -1745,12 +1769,6 @@ struct LearningView: View {
         EmptyView()
     }
 
-    private func feedItemId(_ item: FeedItem) -> String {
-        switch item {
-        case .reel(let reel): return reel.id
-        case .quiz(let quiz): return quiz.id
-        }
-    }
 }
 
 // MARK: - Action Bar Button
@@ -1786,6 +1804,7 @@ private struct DeepDiveCardData: Identifiable {
     let channel: String
     let duration: String
     let thumbnailURL: String
+    let youtubeURL: String
 }
 
 private func deepDiveCards(for topicSlug: String) -> [DeepDiveCardData] {
@@ -1796,19 +1815,22 @@ private func deepDiveCards(for topicSlug: String) -> [DeepDiveCardData] {
                 title: "What Happens Inside a Black Hole?",
                 channel: "Veritasium",
                 duration: "18 min",
-                thumbnailURL: "https://i.ytimg.com/vi/QqsLTNkzvaY/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/QqsLTNkzvaY/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=QqsLTNkzvaY"
             ),
             DeepDiveCardData(
                 title: "Spaghettification Explained",
                 channel: "PBS Space Time",
                 duration: "12 min",
-                thumbnailURL: "https://i.ytimg.com/vi/h1iJXOUMJpg/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/h1iJXOUMJpg/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=h1iJXOUMJpg"
             ),
             DeepDiveCardData(
                 title: "Journey to the Event Horizon",
                 channel: "Kurzgesagt",
                 duration: "9 min",
-                thumbnailURL: "https://i.ytimg.com/vi/ulCdoCfw-bY/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/ulCdoCfw-bY/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=ulCdoCfw-bY"
             ),
         ]
     case "ancient-history":
@@ -1817,40 +1839,46 @@ private func deepDiveCards(for topicSlug: String) -> [DeepDiveCardData] {
                 title: "The Fall of Rome",
                 channel: "Historia Civilis",
                 duration: "15 min",
-                thumbnailURL: "https://i.ytimg.com/vi/3szfK1I7bgg/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/3szfK1I7bgg/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=3szfK1I7bgg"
             ),
             DeepDiveCardData(
                 title: "Ancient Egypt: Mysteries of the Pharaohs",
                 channel: "CrashCourse",
                 duration: "11 min",
-                thumbnailURL: "https://i.ytimg.com/vi/Z3Wvw6BivVI/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/Z3Wvw6BivVI/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=Z3Wvw6BivVI"
             ),
             DeepDiveCardData(
                 title: "The Bronze Age Collapse",
                 channel: "Fall of Civilizations",
                 duration: "22 min",
-                thumbnailURL: "https://i.ytimg.com/vi/BxqpdToY0Hg/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/BxqpdToY0Hg/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=BxqpdToY0Hg"
             ),
         ]
-    case "linear-algebra":
+    case "linear-algebra", "matrices":
         return [
             DeepDiveCardData(
                 title: "Essence of Linear Algebra",
                 channel: "3Blue1Brown",
                 duration: "10 min",
-                thumbnailURL: "https://i.ytimg.com/vi/fNk_zzaMoSs/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/fNk_zzaMoSs/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=fNk_zzaMoSs"
             ),
             DeepDiveCardData(
                 title: "Matrix Multiplication Visualized",
                 channel: "Zach Star",
                 duration: "8 min",
-                thumbnailURL: "https://i.ytimg.com/vi/2spTnAiQg4M/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/2spTnAiQg4M/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=2spTnAiQg4M"
             ),
             DeepDiveCardData(
                 title: "Eigenvectors and Eigenvalues",
                 channel: "Khan Academy",
                 duration: "12 min",
-                thumbnailURL: "https://i.ytimg.com/vi/PhfbEr2btGQ/hqdefault.jpg"
+                thumbnailURL: "https://i.ytimg.com/vi/PhfbEr2btGQ/hqdefault.jpg",
+                youtubeURL: "https://www.youtube.com/watch?v=PhfbEr2btGQ"
             ),
         ]
     default:
@@ -1865,10 +1893,13 @@ struct DeepDiveCard: View {
     let channel: String
     let duration: String
     let thumbnailURL: String
+    let youtubeURL: String
 
     var body: some View {
         Button {
-            // TODO: Open YouTube link
+            if let url = URL(string: youtubeURL) {
+                UIApplication.shared.open(url)
+            }
         } label: {
             HStack(spacing: 14) {
                 // Thumbnail from URL
@@ -1995,6 +2026,7 @@ struct ReelPageView: View {
         ZStack {
             if reel.hasVideo, let videoUrlString = reel.videoUrl, let url = URL(string: videoUrlString) {
                 SingletonPlayerView(url: url, viewId: reel.id, isPlaying: .constant(shouldPlay))
+                    .id(reel.id)
                     .ignoresSafeArea()
                     .onTapGesture {
                         userPaused.toggle()
@@ -2702,6 +2734,8 @@ final class SingletonPlayerUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         playerLayer.frame = bounds
+        // Re-sync when we get new bounds so the active view's layer has correct frame
+        syncPlayerLayer()
     }
 
     func updateURL(_ url: URL) {
@@ -2711,6 +2745,9 @@ final class SingletonPlayerUIView: UIView {
     func syncPlayerLayer() {
         // Only connect layer to player if this view is the active one
         if AudioPlayerManager.shared.isActiveView(viewId) {
+            // Force layout so we have valid bounds before attaching (fixes black screen when layer has zero frame)
+            layoutIfNeeded()
+            playerLayer.frame = bounds
             playerLayer.player = AudioPlayerManager.shared.getPlayer()
         } else {
             playerLayer.player = nil
