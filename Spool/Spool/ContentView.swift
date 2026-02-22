@@ -2049,7 +2049,7 @@ struct CaptionOverlayView: View {
                 }
             }
             .frame(maxWidth: 340)
-            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
 
             Spacer()
                 .frame(height: 120)
@@ -2068,7 +2068,11 @@ struct FlowLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let result = arrangeSubviews(proposal: proposal, subviews: subviews)
         for (index, subview) in subviews.enumerated() {
-            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
+            subview.place(
+                at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y),
+                anchor: .topLeading,
+                proposal: .unspecified
+            )
         }
     }
 
