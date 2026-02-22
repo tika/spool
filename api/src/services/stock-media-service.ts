@@ -79,11 +79,14 @@ export async function fetchStockVideo(
     // Pick a random video from results
     const video = data.videos[Math.floor(Math.random() * data.videos.length)];
 
-    // Find the best quality vertical video file (prefer HD)
-    const videoFile = video.video_files
-      .filter((f) => f.height > f.width) // Vertical
-      .sort((a, b) => b.height - a.height)[0] // Highest quality
-      || video.video_files[0]; // Fallback to any
+    // Prefer 720p vertical to reduce download size and Lambda disk usage
+    const TARGET_HEIGHT = 720;
+    const vertical = video.video_files.filter((f) => f.height > f.width);
+    const withinTarget = vertical.filter((f) => f.height <= TARGET_HEIGHT);
+    const candidates = withinTarget.length > 0 ? withinTarget : vertical;
+    const videoFile =
+      candidates.sort((a, b) => b.height - a.height)[0] ||
+      video.video_files[0];
 
     return {
       url: videoFile.link,
