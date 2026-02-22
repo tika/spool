@@ -4,6 +4,7 @@ import { log } from "./lib/logger";
 import { startWorker } from "./queue";
 import { topicRepository } from "./repositories/topic-repository";
 import { feedRoutes } from "./routes/feed";
+import { quizzesRoutes } from "./routes/quizzes";
 import { topicsRoutes } from "./routes/topics";
 import { usersRoutes } from "./routes/users";
 import { videosRoutes } from "./routes/videos";
@@ -87,6 +88,7 @@ app.get("/", (c) => {
 // Routes
 app.route("/users", usersRoutes);
 app.route("/topics", topicsRoutes);
+app.route("/topics", quizzesRoutes);
 app.route("/feed", feedRoutes);
 app.route("/videos", videosRoutes);
 app.route("/webhooks", webhooksRoutes);

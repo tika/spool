@@ -1,6 +1,13 @@
-import { count, eq } from "drizzle-orm";
-import type { ConceptInfo } from "../agents/curriculum-agent";
-import { db, topics, concepts, conceptPrerequisites } from "../db";
+import { count, eq, inArray } from "drizzle-orm";
+import type { ConceptInfo, QuizInfo } from "../agents/curriculum-agent";
+import {
+	db,
+	topics,
+	concepts,
+	conceptPrerequisites,
+	quizzes,
+	quizConcepts,
+} from "../db";
 import type { TopicRepositoryForWorker } from "../queue";
 
 export type TopicStatus = "generating" | "ready" | "failed";
@@ -27,6 +34,38 @@ export class TopicRepository implements TopicRepositoryForWorker {
 			description: data.description ?? "",
 			status: data.status,
 		});
+	}
+
+	async listTopics(): Promise<Topic[]> {
+		const topicRows = await db
+			.select()
+			.from(topics)
+			.orderBy(topics.createdAt);
+
+		if (topicRows.length === 0) return [];
+
+		const topicIds = topicRows.map((t) => t.id);
+		const countRows = await db
+			.select({
+				topicId: concepts.topicId,
+				count: count(),
+			})
+			.from(concepts)
+			.where(inArray(concepts.topicId, topicIds))
+			.groupBy(concepts.topicId);
+
+		const countByTopicId = new Map(
+			countRows.map((r) => [r.topicId, r.count]),
+		);
+
+		return topicRows.map((t) => ({
+			slug: t.slug,
+			name: t.name,
+			description: t.description ?? "",
+			status: t.status as TopicStatus,
+			conceptCount: countByTopicId.get(t.id) ?? 0,
+			createdAt: t.createdAt,
+		}));
 	}
 
 	async getTopicBySlug(slug: string): Promise<Topic | null> {
@@ -60,7 +99,7 @@ export class TopicRepository implements TopicRepositoryForWorker {
 	async saveConcepts(
 		topicSlug: string,
 		conceptInfos: ConceptInfo[],
-	): Promise<void> {
+	): Promise<Map<string, string>> {
 		// 1. Look up the topic
 		const [topic] = await db
 			.select({ id: topics.id })
@@ -116,6 +155,59 @@ export class TopicRepository implements TopicRepositoryForWorker {
 						})
 						.onConflictDoNothing();
 				}
+			}
+		}
+
+		return slugToId;
+	}
+
+	async saveQuizzes(
+		topicSlug: string,
+		quizInfos: QuizInfo[],
+		slugToConceptId: Map<string, string>,
+	): Promise<void> {
+		const [topic] = await db
+			.select({ id: topics.id })
+			.from(topics)
+			.where(eq(topics.slug, topicSlug))
+			.limit(1);
+
+		if (!topic) throw new Error(`Topic not found: ${topicSlug}`);
+
+		for (let i = 0; i < quizInfos.length; i++) {
+			const quiz = quizInfos[i];
+			const conceptIds: string[] = [];
+			for (const slug of quiz.concept_slugs) {
+				let id = slugToConceptId.get(slug);
+				if (!id) {
+					const [existing] = await db
+						.select({ id: concepts.id })
+						.from(concepts)
+						.where(eq(concepts.slug, slug))
+						.limit(1);
+					id = existing?.id;
+				}
+				if (id) conceptIds.push(id);
+			}
+
+			if (conceptIds.length === 0) continue;
+
+			const [created] = await db
+				.insert(quizzes)
+				.values({
+					topicId: topic.id,
+					question: quiz.question,
+					correctAnswer: quiz.correct_answer,
+					answerChoices: quiz.answer_choices,
+					orderIndex: i,
+				})
+				.returning({ id: quizzes.id });
+
+			for (const conceptId of conceptIds) {
+				await db
+					.insert(quizConcepts)
+					.values({ quizId: created.id, conceptId })
+					.onConflictDoNothing();
 			}
 		}
 	}

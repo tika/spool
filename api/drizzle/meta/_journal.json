@@ -8,6 +8,20 @@
       "when": 1771711180039,
       "tag": "0000_last_madrox",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771733806098,
+      "tag": "0001_broken_madame_web",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771786692756,
+      "tag": "0002_clear_ezekiel_stane",
+      "breakpoints": true
     }
   ]
 }

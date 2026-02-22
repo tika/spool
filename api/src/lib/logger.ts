@@ -74,5 +74,6 @@ export const log = {
   video: createLogger("video"),
   curriculum: createLogger("curriculum"),
   api: createLogger("api"),
+  feed: createLogger("feed"),
   db: createLogger("db"),
 };

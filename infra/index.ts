@@ -1,28 +1,28 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
-// ─── S3 Bucket: unscroll-assets ─────────────────────────────────
+// ─── S3 Bucket: unscroll-assets ─────────────────────────────────────
 // Our bucket for storing:
 //   - Final rendered videos (reels/<slug>/<id>.mp4)
 //   - Temp render assets like TTS audio (render-assets/<jobId>/audio.mp3)
 // Public read so video URLs are directly servable.
 
 const assetsBucket = new aws.s3.BucketV2("unscroll-assets", {
-  bucket: "unscroll-assets",
-  forceDestroy: true,
+	bucket: "unscroll-assets",
+	forceDestroy: true,
 });
 
 new aws.s3.BucketPublicAccessBlock("unscroll-assets-public-access", {
-  bucket: assetsBucket.id,
-  blockPublicAcls: false,
-  blockPublicPolicy: false,
-  ignorePublicAcls: false,
-  restrictPublicBuckets: false,
+	bucket: assetsBucket.id,
+	blockPublicAcls: false,
+	blockPublicPolicy: false,
+	ignorePublicAcls: false,
+	restrictPublicBuckets: false,
 });
 
 new aws.s3.BucketPolicy("unscroll-assets-policy", {
-  bucket: assetsBucket.id,
-  policy: pulumi.interpolate`{
+	bucket: assetsBucket.id,
+	policy: pulumi.interpolate`{
     "Version": "2012-10-17",
     "Statement": [
       {
@@ -36,9 +36,21 @@ new aws.s3.BucketPolicy("unscroll-assets-policy", {
   }`,
 });
 
-// ─── Exports ───────────────────────────────────────────────────────
-// After `pulumi up`, copy these into your api/.env
+// CORS: allow Chromium/Puppeteer (Revideo, Modal, etc.) to load media from S3
+new aws.s3.BucketCorsConfigurationV2("unscroll-assets-cors", {
+	bucket: assetsBucket.id,
+	corsRules: [
+		{
+			allowedHeaders: ["*"],
+			allowedMethods: ["GET", "HEAD"],
+			allowedOrigins: ["*"],
+			exposeHeaders: [],
+			maxAgeSeconds: 3600,
+		},
+	],
+});
 
+// ─── Exports ───────────────────────────────────────────────────────
 export const awsRegion = aws.config.region;
 export const assetsBucketName = assetsBucket.bucket;
 export const assetsBucketUrl = pulumi.interpolate`https://${assetsBucket.bucketRegionalDomainName}`;

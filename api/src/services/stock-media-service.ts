@@ -43,17 +43,20 @@ interface PexelsPhotoResponse {
 }
 
 /**
- * Fetches a stock video from Pexels based on background type
+ * Fetches a stock video from Pexels. Uses topic-specific query when provided
+ * to avoid generic teacher/classroom footage.
  */
 export async function fetchStockVideo(
-  backgroundType: BackgroundType
+  backgroundType: BackgroundType,
+  topicQuery?: string
 ): Promise<StockMediaResult | null> {
   if (!PEXELS_API_KEY) {
     console.warn("PEXELS_API_KEY not set, falling back to gradient");
     return null;
   }
 
-  const query = BACKGROUND_SEARCH_QUERIES[backgroundType];
+  const query =
+    topicQuery?.trim() || BACKGROUND_SEARCH_QUERIES[backgroundType];
 
   try {
     const response = await fetch(
@@ -79,11 +82,14 @@ export async function fetchStockVideo(
     // Pick a random video from results
     const video = data.videos[Math.floor(Math.random() * data.videos.length)];
 
-    // Find the best quality vertical video file (prefer HD)
-    const videoFile = video.video_files
-      .filter((f) => f.height > f.width) // Vertical
-      .sort((a, b) => b.height - a.height)[0] // Highest quality
-      || video.video_files[0]; // Fallback to any
+    // Prefer 720p vertical to reduce download size and Lambda disk usage
+    const TARGET_HEIGHT = 720;
+    const vertical = video.video_files.filter((f) => f.height > f.width);
+    const withinTarget = vertical.filter((f) => f.height <= TARGET_HEIGHT);
+    const candidates = withinTarget.length > 0 ? withinTarget : vertical;
+    const videoFile =
+      candidates.sort((a, b) => b.height - a.height)[0] ||
+      video.video_files[0];
 
     return {
       url: videoFile.link,
@@ -97,17 +103,20 @@ export async function fetchStockVideo(
 }
 
 /**
- * Fetches a stock image from Pexels based on background type
+ * Fetches a stock image from Pexels. Uses topic-specific query when provided
+ * to avoid generic teacher/classroom imagery.
  */
 export async function fetchStockImage(
-  backgroundType: BackgroundType
+  backgroundType: BackgroundType,
+  topicQuery?: string
 ): Promise<StockMediaResult | null> {
   if (!PEXELS_API_KEY) {
     console.warn("PEXELS_API_KEY not set, falling back to gradient");
     return null;
   }
 
-  const query = BACKGROUND_SEARCH_QUERIES[backgroundType];
+  const query =
+    topicQuery?.trim() || BACKGROUND_SEARCH_QUERIES[backgroundType];
 
   try {
     const response = await fetch(
@@ -145,17 +154,20 @@ export async function fetchStockImage(
 }
 
 /**
- * Fetches stock media (prefers video, falls back to image)
+ * Fetches stock media (prefers video, falls back to image).
+ * When topicQuery is provided, uses it for topic-specific B-roll instead of
+ * generic BACKGROUND_SEARCH_QUERIES (avoids teacher/classroom footage).
  */
 export async function fetchStockMedia(
-  backgroundType: BackgroundType
+  backgroundType: BackgroundType,
+  topicQuery?: string
 ): Promise<StockMediaResult | null> {
   // Try video first
-  const video = await fetchStockVideo(backgroundType);
+  const video = await fetchStockVideo(backgroundType, topicQuery);
   if (video) return video;
 
   // Fall back to image
-  const image = await fetchStockImage(backgroundType);
+  const image = await fetchStockImage(backgroundType, topicQuery);
   if (image) return image;
 
   // No media found

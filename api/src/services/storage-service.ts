@@ -56,7 +56,15 @@ export async function uploadAudioToS3(
     }),
   );
 
-  const url = await getSignedUrl(
+  return getPresignedUrlForKey(key);
+}
+
+/**
+ * Returns a presigned URL for an existing S3 object in the assets bucket.
+ * Use for private objects that Remotion Lambda needs to fetch (e.g. hardcoded audio).
+ */
+export async function getPresignedUrlForKey(key: string): Promise<string> {
+  return getSignedUrl(
     s3Client,
     new GetObjectCommand({
       Bucket: ASSETS_BUCKET,
@@ -64,8 +72,28 @@ export async function uploadAudioToS3(
     }),
     { expiresIn: 3600 },
   );
+}
 
-  return url;
+/**
+ * Parses S3 key from a URL like https://bucket.s3.region.amazonaws.com/key
+ */
+export function parseS3KeyFromUrl(url: string, bucket: string): string | null {
+  const region = process.env.AWS_REGION || "us-east-2";
+  const prefix = `https://${bucket}.s3.${region}.amazonaws.com/`;
+  if (!url.startsWith(prefix)) return null;
+  return url.slice(prefix.length) || null;
+}
+
+/**
+ * If the URL points to our assets bucket, returns a presigned URL for Lambda access.
+ * Otherwise returns the original URL (for public/external URLs).
+ */
+export async function ensurePresignedUrlForAssets(
+  url: string,
+): Promise<string> {
+  const key = parseS3KeyFromUrl(url, ASSETS_BUCKET);
+  if (!key) return url;
+  return getPresignedUrlForKey(key);
 }
 
 /**

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { ConceptInfo } from "./curriculum-agent";
 import { createOpenRouterClient } from "../lib/openrouter";
 import {
 	VIDEO_SCRIPT_SYSTEM_PROMPT,
@@ -11,10 +10,12 @@ const VIDEO_SCRIPT_MODEL = "openai/gpt-oss-120b";
 
 const ScriptOutputSchema = z.object({
 	transcript: z.string(),
+	hook: z.string().optional().default(""),
 	point: z.string(),
 	tone: z.string(),
 	voice_type: z.string(),
 	background: z.string(),
+	backgroundSearchQuery: z.string().optional().default(""),
 	quality_score: z.number().min(0).max(100),
 });
 
@@ -29,7 +30,7 @@ function parseJsonResponse(text: string): unknown {
 }
 
 export async function generateScript(
-	concept: ConceptInfo,
+	concept: { name: string; description: string },
 	options?: { angle?: string },
 ): Promise<ScriptResult> {
 	const client = createOpenRouterClient("CDA");

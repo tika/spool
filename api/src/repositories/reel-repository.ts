@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { db, reels, concepts, type Reel, type NewReel } from "../db";
+import { and, eq } from "drizzle-orm";
+import { db, reels, concepts, type Reel } from "../db";
 
 export interface CreateReelInput {
 	conceptId: string;
@@ -7,6 +7,8 @@ export interface CreateReelInput {
 	description?: string;
 	transcript?: string;
 	videoUrl: string;
+	audioUrl?: string;
+	captions?: Array<{ word: string; startTime: number; endTime: number }>;
 	thumbnailUrl?: string;
 	durationSeconds?: number;
 	source?: string;
@@ -24,6 +26,8 @@ export class ReelRepository {
 				description: input.description,
 				transcript: input.transcript,
 				videoUrl: input.videoUrl,
+				audioUrl: input.audioUrl,
+				captions: input.captions,
 				thumbnailUrl: input.thumbnailUrl,
 				durationSeconds: input.durationSeconds,
 				source: input.source || "generated",
@@ -35,11 +39,49 @@ export class ReelRepository {
 		return reel;
 	}
 
+	async updateReelAudio(
+		reelId: string,
+		data: {
+			audioUrl: string;
+			transcript: string;
+			captions: Array<{ word: string; startTime: number; endTime: number }>;
+			durationSeconds: number;
+			tone?: string;
+		},
+	): Promise<void> {
+		await db
+			.update(reels)
+			.set({
+				audioUrl: data.audioUrl,
+				transcript: data.transcript,
+				captions: data.captions,
+				durationSeconds: data.durationSeconds,
+				tone: data.tone,
+			})
+			.where(eq(reels.id, reelId));
+	}
+
 	async getReelByConceptId(conceptId: string): Promise<Reel | null> {
 		const [reel] = await db
 			.select()
 			.from(reels)
 			.where(eq(reels.conceptId, conceptId))
+			.limit(1);
+
+		return reel ?? null;
+	}
+
+	/** Returns a completed reel for the concept, if one exists. Used for idempotency. */
+	async getCompletedReelByConceptId(conceptId: string): Promise<Reel | null> {
+		const [reel] = await db
+			.select()
+			.from(reels)
+			.where(
+				and(
+					eq(reels.conceptId, conceptId),
+					eq(reels.status, "completed"),
+				),
+			)
 			.limit(1);
 
 		return reel ?? null;

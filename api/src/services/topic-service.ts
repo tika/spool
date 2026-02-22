@@ -10,6 +10,10 @@ export interface CreateTopicResult {
 }
 
 export const topicService = {
+	async listTopics() {
+		return topicRepository.listTopics();
+	},
+
 	async createTopic(title: string): Promise<CreateTopicResult> {
 		const slug = slugify(title) || "topic";
 
