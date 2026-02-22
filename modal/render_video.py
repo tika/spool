@@ -41,13 +41,15 @@ image = (
         "../video",
         remote_path="/app/video",
         ignore=lambda path: "node_modules" in str(path) or ".git" in str(path),
+        copy=True,  # required to run bun install after; files baked into image
     )
+    .run_commands("cd /app/video && bun install")
 )
 
 
 @app.function(
     image=image,
-    timeout=600,
+    timeout=900,  # 15 min - bun install + render can be slow
     memory=16384,
     cpu=4,
 )
@@ -58,26 +60,23 @@ def render_video(
     captions: list,
     duration_in_seconds: float,
     gradient_colors: list | None = None,
+    hook: str | None = None,
+    pattern_interrupts: list | None = None,
 ) -> bytes:
     """Render a video and return the MP4 bytes."""
-    import tempfile
+    print("[render] Starting video render", flush=True)
+    print(f"[render] duration={duration_in_seconds}s captions={len(captions)} pattern_interrupts={len(pattern_interrupts or [])}", flush=True)
 
-    # Install dependencies
-    subprocess.run(
-        ["bun", "install"],
-        cwd="/app/video",
-        check=True,
-        capture_output=True,
-    )
-
-    # Create render script
+    # Create render script with progress logging (deps pre-installed in image)
     render_script = """
 const { renderVideo } = require('@revideo/renderer');
 const fs = require('fs');
 
 const params = JSON.parse(process.argv[2]);
 
+let lastLoggedPct = -1;
 async function main() {
+    console.log('[render] Starting Revideo render...');
     await renderVideo({
         projectFile: '/app/video/src/project.ts',
         variables: {
@@ -87,11 +86,20 @@ async function main() {
             captions: params.captions,
             durationInSeconds: params.durationInSeconds,
             gradientColors: params.gradientColors || ['#1a1a2e', '#16213e'],
+            hook: params.hook,
+            patternInterrupts: params.patternInterrupts || [],
         },
         settings: {
             outDir: '/tmp',
             outFile: 'output.mp4',
             logProgress: true,
+            progressCallback: (workerId, progress) => {
+                const pct = Math.floor(progress * 10) * 10;
+                if (pct > lastLoggedPct) {
+                    lastLoggedPct = pct;
+                    console.log('[render] Progress: ' + pct + '%');
+                }
+            },
             puppeteer: {
                 args: [
                     '--no-sandbox',
@@ -101,11 +109,11 @@ async function main() {
             },
         },
     });
-    console.log('RENDER_COMPLETE');
+    console.log('[render] RENDER_COMPLETE');
 }
 
 main().catch(err => {
-    console.error(err);
+    console.error('[render] ERROR:', err);
     process.exit(1);
 });
 """
@@ -121,26 +129,28 @@ main().catch(err => {
         "captions": captions,
         "durationInSeconds": duration_in_seconds,
         "gradientColors": gradient_colors or ["#1a1a2e", "#16213e"],
+        "hook": hook,
+        "patternInterrupts": pattern_interrupts or [],
     }
 
-    # Run render from /app/video so Node resolves @revideo/renderer from node_modules
+    # Run render - stream stdout/stderr to Modal logs (no capture)
+    print("[render] Starting Node render process...", flush=True)
     result = subprocess.run(
         ["node", render_script_path, json.dumps(params)],
         cwd="/app/video",
-        capture_output=True,
+        capture_output=False,  # stream to Modal logs in real time
         text=True,
     )
 
-    print("STDOUT:", result.stdout)
-    print("STDERR:", result.stderr)
-
     if result.returncode != 0:
-        raise Exception(f"Render failed: {result.stderr}")
+        raise Exception(f"Render process exited with code {result.returncode}")
 
-    # Read output file
     output_path = "/tmp/output.mp4"
     if not os.path.exists(output_path):
         raise Exception(f"Output file not found at {output_path}")
+
+    size = os.path.getsize(output_path)
+    print(f"[render] Done. Output size: {size} bytes", flush=True)
 
     with open(output_path, "rb") as f:
         return f.read()
@@ -148,7 +158,7 @@ main().catch(err => {
 
 @app.function(
     image=image,
-    timeout=600,
+    timeout=900,
     memory=16384,
     cpu=4,
 )
@@ -163,6 +173,8 @@ def render_video_endpoint(data: dict) -> dict:
             captions=data.get("captions", []),
             duration_in_seconds=data["durationInSeconds"],
             gradient_colors=data.get("gradientColors"),
+            hook=data.get("hook"),
+            pattern_interrupts=data.get("patternInterrupts"),
         )
 
         # Return base64 encoded video or upload to S3
@@ -182,11 +194,19 @@ def render_video_endpoint(data: dict) -> dict:
 # For local testing
 if __name__ == "__main__":
     with app.run():
+        # Use real audio URL and sample captions for testing
         result = render_video.remote(
-            audio_url="https://example.com/audio.mp3",
+            audio_url="https://unscroll-assets.s3.us-east-2.amazonaws.com/render-assets/19a1ec6e-f8cb-4f48-b028-d98e6537ad73/audio.mp3",
             background_url="",
             background_type="gradient",
-            captions=[],
+            captions=[
+                {"word": "Hello", "startTime": 0.0, "endTime": 0.5},
+                {"word": "world", "startTime": 0.5, "endTime": 1.0},
+                {"word": "this", "startTime": 1.0, "endTime": 1.3},
+                {"word": "is", "startTime": 1.3, "endTime": 1.5},
+                {"word": "a", "startTime": 1.5, "endTime": 1.6},
+                {"word": "test", "startTime": 1.6, "endTime": 2.0},
+            ],
             duration_in_seconds=5,
         )
         print(f"Rendered {len(result)} bytes")

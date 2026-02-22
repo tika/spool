@@ -43,17 +43,20 @@ interface PexelsPhotoResponse {
 }
 
 /**
- * Fetches a stock video from Pexels based on background type
+ * Fetches a stock video from Pexels. Uses topic-specific query when provided
+ * to avoid generic teacher/classroom footage.
  */
 export async function fetchStockVideo(
-  backgroundType: BackgroundType
+  backgroundType: BackgroundType,
+  topicQuery?: string
 ): Promise<StockMediaResult | null> {
   if (!PEXELS_API_KEY) {
     console.warn("PEXELS_API_KEY not set, falling back to gradient");
     return null;
   }
 
-  const query = BACKGROUND_SEARCH_QUERIES[backgroundType];
+  const query =
+    topicQuery?.trim() || BACKGROUND_SEARCH_QUERIES[backgroundType];
 
   try {
     const response = await fetch(
@@ -100,17 +103,20 @@ export async function fetchStockVideo(
 }
 
 /**
- * Fetches a stock image from Pexels based on background type
+ * Fetches a stock image from Pexels. Uses topic-specific query when provided
+ * to avoid generic teacher/classroom imagery.
  */
 export async function fetchStockImage(
-  backgroundType: BackgroundType
+  backgroundType: BackgroundType,
+  topicQuery?: string
 ): Promise<StockMediaResult | null> {
   if (!PEXELS_API_KEY) {
     console.warn("PEXELS_API_KEY not set, falling back to gradient");
     return null;
   }
 
-  const query = BACKGROUND_SEARCH_QUERIES[backgroundType];
+  const query =
+    topicQuery?.trim() || BACKGROUND_SEARCH_QUERIES[backgroundType];
 
   try {
     const response = await fetch(
@@ -148,17 +154,20 @@ export async function fetchStockImage(
 }
 
 /**
- * Fetches stock media (prefers video, falls back to image)
+ * Fetches stock media (prefers video, falls back to image).
+ * When topicQuery is provided, uses it for topic-specific B-roll instead of
+ * generic BACKGROUND_SEARCH_QUERIES (avoids teacher/classroom footage).
  */
 export async function fetchStockMedia(
-  backgroundType: BackgroundType
+  backgroundType: BackgroundType,
+  topicQuery?: string
 ): Promise<StockMediaResult | null> {
   // Try video first
-  const video = await fetchStockVideo(backgroundType);
+  const video = await fetchStockVideo(backgroundType, topicQuery);
   if (video) return video;
 
   // Fall back to image
-  const image = await fetchStockImage(backgroundType);
+  const image = await fetchStockImage(backgroundType, topicQuery);
   if (image) return image;
 
   // No media found

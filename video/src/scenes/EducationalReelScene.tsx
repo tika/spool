@@ -1,18 +1,9 @@
-import { makeScene2D, Video, Img, Rect, Txt, Node, Layout } from "@revideo/2d";
-import {
-  all,
-  createRef,
-  useScene,
-  waitFor,
-  Reference,
-  tween,
-  easeOutBack,
-  usePlayback,
-} from "@revideo/core";
-import type { CaptionWord, ReelProps } from "../types";
+import { makeScene2D, Video, Img, Rect, Txt, Layout, Audio } from "@revideo/2d";
+import { createRef, useScene, tween } from "@revideo/core";
+import type { Reference } from "@revideo/core";
+import type { CaptionWord, PatternInterrupt, ReelProps } from "../types";
 
 const WORDS_PER_LINE = 4;
-const DEFAULT_FPS = 30;
 
 export default makeScene2D(function* (view) {
   // Get variables passed from render service
@@ -23,6 +14,8 @@ export default makeScene2D(function* (view) {
   const captions = vars.get("captions", [])() as CaptionWord[];
   const durationInSeconds = vars.get("durationInSeconds", 30)();
   const gradientColors = vars.get("gradientColors", ["#1a1a2e", "#16213e"])() as [string, string];
+  const hook = vars.get("hook", "")();
+  const patternInterrupts = vars.get("patternInterrupts", [])() as PatternInterrupt[];
 
   // ─── Background Layer ───────────────────────────────────────────────
   if (backgroundType === "video" && backgroundUrl) {
@@ -34,6 +27,7 @@ export default makeScene2D(function* (view) {
         width={540}
         height={960}
         play={true}
+        loop={true}
       />
     );
     view.add(
@@ -61,6 +55,11 @@ export default makeScene2D(function* (view) {
         fill={gradientColors[0]}
       />
     );
+  }
+
+  // ─── Audio (invisible, merged into output) ───────────────────────────
+  if (audioUrl) {
+    view.add(<Audio src={audioUrl} play={true} />);
   }
 
   // ─── Captions Container ─────────────────────────────────────────────
@@ -108,6 +107,39 @@ export default makeScene2D(function* (view) {
     />
   );
 
+  // ─── Hook Text (first 3 seconds) ────────────────────────────────────
+  const hookRef = createRef<Txt>();
+  view.add(
+    <Txt
+      ref={hookRef}
+      text={hook}
+      fontFamily="Montserrat, system-ui, sans-serif"
+      fontWeight={900}
+      fontSize={72}
+      fill="#FFFFFF"
+      textAlign="center"
+      width={480}
+      y={-80}
+    />
+  );
+
+  // ─── Pattern Interrupt Images ───────────────────────────────────────
+  const interruptRefs: Reference<Img>[] = [];
+  for (const interrupt of patternInterrupts) {
+    const ref = createRef<Img>();
+    interruptRefs.push(ref);
+    view.add(
+      <Img
+        ref={ref}
+        src={interrupt.imageUrl}
+        width={360}
+        height={360}
+        opacity={0}
+        scale={0.8}
+      />
+    );
+  }
+
   // ─── Main Animation ─────────────────────────────────────────────────
   // Animate captions and progress bar over the duration
   let lastActiveIndex = -1;
@@ -117,6 +149,32 @@ export default makeScene2D(function* (view) {
 
     // Update progress bar
     progressRef().width(t * 536);
+
+    // Hook: show for first 3 seconds, then hide
+    hookRef().opacity(currentTime < 3 ? 1 : 0);
+
+    // Pattern interrupts: scale-up and fade per interrupt
+    for (let i = 0; i < patternInterrupts.length; i++) {
+      const interrupt = patternInterrupts[i];
+      const ref = interruptRefs[i];
+      const localT = currentTime - interrupt.startTime;
+      if (localT < 0 || localT > interrupt.duration) {
+        ref().opacity(0);
+      } else {
+        const fadeIn = 0.3;
+        const fadeOut = 0.3;
+        if (localT < fadeIn) {
+          ref().opacity(localT / fadeIn);
+          ref().scale(0.8 + (localT / fadeIn) * 0.2);
+        } else if (localT > interrupt.duration - fadeOut) {
+          ref().opacity((interrupt.duration - localT) / fadeOut);
+          ref().scale(1);
+        } else {
+          ref().opacity(1);
+          ref().scale(1);
+        }
+      }
+    }
 
     // Find current word index
     let currentWordIndex = captions.findIndex(
@@ -128,8 +186,8 @@ export default makeScene2D(function* (view) {
       currentWordIndex = nextWordIndex > 0 ? nextWordIndex - 1 : captions.length - 1;
     }
 
-    // Don't show captions before first word
-    if (currentTime < (captions[0]?.startTime ?? 0)) {
+    // Don't show captions during hook phase (first 3s) or before first word
+    if (currentTime < 3 || currentTime < (captions[0]?.startTime ?? 0)) {
       for (const ref of wordRefs) {
         ref().text("");
       }

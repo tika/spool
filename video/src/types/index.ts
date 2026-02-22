@@ -4,6 +4,13 @@ export interface CaptionWord {
   endTime: number;
 }
 
+export interface PatternInterrupt {
+  startTime: number;
+  duration: number;
+  imageUrl: string;
+  label?: string;
+}
+
 export interface ReelProps {
   audioUrl: string;
   backgroundUrl: string;
@@ -11,6 +18,8 @@ export interface ReelProps {
   captions: CaptionWord[];
   durationInSeconds: number;
   gradientColors?: [string, string];
+  hook?: string;
+  patternInterrupts?: PatternInterrupt[];
 }
 
 export type BackgroundType =

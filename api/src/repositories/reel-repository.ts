@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm";
-import { db, reels, concepts, type Reel, type NewReel } from "../db";
+import { and, eq } from "drizzle-orm";
+import { db, reels, concepts, type Reel } from "../db";
 
 export interface CreateReelInput {
 	conceptId: string;
@@ -40,6 +40,22 @@ export class ReelRepository {
 			.select()
 			.from(reels)
 			.where(eq(reels.conceptId, conceptId))
+			.limit(1);
+
+		return reel ?? null;
+	}
+
+	/** Returns a completed reel for the concept, if one exists. Used for idempotency. */
+	async getCompletedReelByConceptId(conceptId: string): Promise<Reel | null> {
+		const [reel] = await db
+			.select()
+			.from(reels)
+			.where(
+				and(
+					eq(reels.conceptId, conceptId),
+					eq(reels.status, "completed"),
+				),
+			)
 			.limit(1);
 
 		return reel ?? null;

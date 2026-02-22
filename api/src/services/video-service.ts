@@ -10,6 +10,7 @@ import type {
 	BackgroundType,
 	RenderInput,
 	CaptionWord,
+	PatternInterrupt,
 } from "../types/video";
 import { BACKGROUND_GRADIENT_COLORS } from "../types/video";
 import { generateTTSWithCaptions } from "./tts-service";
@@ -24,7 +25,10 @@ const HARDCODED_AUDIO_DURATION = 90;
 const USE_HARDCODED_AUDIO_ONLY =
 	process.env.USE_HARDCODED_AUDIO_ONLY === "true";
 
-import { fetchStockMedia } from "./stock-media-service";
+import {
+	fetchStockMedia,
+	fetchStockImage,
+} from "./stock-media-service";
 import {
 	uploadAudioToS3,
 	uploadVideo,
@@ -87,7 +91,9 @@ export function updateJobStatus(
 }
 
 /**
- * Main video generation pipeline
+ * Main video generation pipeline.
+ * Idempotent: if a completed reel already exists for this concept, returns it
+ * immediately without regenerating script, TTS, or video.
  */
 export async function generateVideo(job: VideoJob): Promise<string> {
 	const { input } = job;
@@ -97,6 +103,27 @@ export async function generateVideo(job: VideoJob): Promise<string> {
 	jobLog.info("Pipeline started", { concept: input.conceptSlug });
 
 	try {
+		// Idempotency: skip pipeline if already completed for this concept
+		const existingReel =
+			await reelRepository.getCompletedReelByConceptId(input.conceptId);
+		if (existingReel?.status === "completed" && existingReel.videoUrl) {
+			jobLog.info("Reel already exists for concept, returning immediately", {
+				concept: input.conceptSlug,
+				videoUrl: existingReel.videoUrl,
+			});
+			updateJobStatus(job.id, "completed", 100, {
+				videoUrl: existingReel.videoUrl,
+			});
+			if (input.webhookUrl) {
+				await fireWebhook(input.webhookUrl, {
+					jobId: job.id,
+					status: "completed",
+					videoUrl: existingReel.videoUrl,
+				});
+			}
+			return existingReel.videoUrl;
+		}
+
 		// Step 1: Generate script
 		jobLog.debug("Step 1/7: Generating script");
 		updateJobStatus(job.id, "scripting", 10);
@@ -159,16 +186,24 @@ export async function generateVideo(job: VideoJob): Promise<string> {
 		const mediaStart = Date.now();
 		const backgroundType = (script.background ||
 			"minimal_gradient") as BackgroundType;
-		const stockMedia = await fetchStockMedia(backgroundType);
+		const stockMedia = await fetchStockMedia(
+			backgroundType,
+			script.backgroundSearchQuery,
+		);
 		jobLog.debug("Stock media fetched", {
 			durationMs: Date.now() - mediaStart,
 			type: stockMedia?.type || "gradient",
 			hasMedia: !!stockMedia?.url,
 		});
 
-		// Step 4: Prepare render input
+		// Step 4: Prepare render input (incl. pattern interrupts every 4s)
 		jobLog.debug("Step 4/7: Preparing render");
 		updateJobStatus(job.id, "rendering", 50);
+		const patternInterrupts = await buildPatternInterrupts(
+			durationSeconds,
+			backgroundType,
+			script.backgroundSearchQuery,
+		);
 		const renderInput: RenderInput = {
 			audioUrl,
 			backgroundUrl: stockMedia?.url || "",
@@ -176,15 +211,21 @@ export async function generateVideo(job: VideoJob): Promise<string> {
 			captions,
 			durationInSeconds: durationSeconds + 1,
 			gradientColors: BACKGROUND_GRADIENT_COLORS[backgroundType],
+			hook: script.hook,
+			patternInterrupts,
 		};
 
 		// Step 5: Render video with Revideo
-		jobLog.debug("Step 5/6: Rendering video");
+		jobLog.info("Step 5/6: Rendering video (this may take several minutes)");
 		const renderStart = Date.now();
-		const outputPath = await renderWithRevideo(renderInput, job.id, (progress) => {
-			updateJobStatus(job.id, "rendering", 50 + Math.round(progress * 0.35));
-		});
-		jobLog.debug("Render completed", {
+		const outputPath = await renderWithRevideo(
+			renderInput,
+			job.id,
+			(progress) => {
+				updateJobStatus(job.id, "rendering", 50 + Math.round(progress * 0.35));
+			},
+		);
+		jobLog.info("Render completed", {
 			durationMs: Date.now() - renderStart,
 			outputPath,
 		});
@@ -251,6 +292,32 @@ export async function generateVideo(job: VideoJob): Promise<string> {
 
 		throw error;
 	}
+}
+
+/** Build time-based pattern interrupts every 4 seconds (Option A). */
+async function buildPatternInterrupts(
+	durationSeconds: number,
+	backgroundType: BackgroundType,
+	topicQuery?: string,
+): Promise<PatternInterrupt[]> {
+	const INTERRUPT_INTERVAL = 4;
+	const INTERRUPT_DURATION = 3;
+	const interrupts: PatternInterrupt[] = [];
+	let startTime = INTERRUPT_INTERVAL;
+
+	while (startTime < durationSeconds - 1) {
+		const img = await fetchStockImage(backgroundType, topicQuery);
+		if (img?.url) {
+			interrupts.push({
+				startTime,
+				duration: INTERRUPT_DURATION,
+				imageUrl: img.url,
+			});
+		}
+		startTime += INTERRUPT_INTERVAL;
+	}
+
+	return interrupts;
 }
 
 async function fireWebhook(

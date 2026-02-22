@@ -45,6 +45,13 @@ export interface StockMediaResult {
   attribution?: string;
 }
 
+export interface PatternInterrupt {
+  startTime: number;
+  duration: number;
+  imageUrl: string;
+  label?: string;
+}
+
 export interface RenderInput {
   audioUrl: string;
   backgroundUrl: string;
@@ -52,6 +59,8 @@ export interface RenderInput {
   captions: CaptionWord[];
   durationInSeconds: number;
   gradientColors?: [string, string];
+  hook?: string;
+  patternInterrupts?: PatternInterrupt[];
 }
 
 export type BackgroundType =

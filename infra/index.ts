@@ -36,6 +36,20 @@ new aws.s3.BucketPolicy("unscroll-assets-policy", {
   }`,
 });
 
+// CORS: allow Chromium/Puppeteer (Revideo, Modal, etc.) to load media from S3
+new aws.s3.BucketCorsConfigurationV2("unscroll-assets-cors", {
+	bucket: assetsBucket.id,
+	corsRules: [
+		{
+			allowedHeaders: ["*"],
+			allowedMethods: ["GET", "HEAD"],
+			allowedOrigins: ["*"],
+			exposeHeaders: [],
+			maxAgeSeconds: 3600,
+		},
+	],
+});
+
 // ─── Exports ───────────────────────────────────────────────────────
 export const awsRegion = aws.config.region;
 export const assetsBucketName = assetsBucket.bucket;
