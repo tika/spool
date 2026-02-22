@@ -7,6 +7,7 @@
 
 import AVFoundation
 import Combine
+import CoreMedia
 import SwiftUI
 
 // MARK: - Audio Player Manager (Singleton)
@@ -17,13 +18,13 @@ final class AudioPlayerManager: ObservableObject {
     private var player: AVQueuePlayer?
     private var playerLooper: AVPlayerLooper?
     private var currentURL: URL?
+    private var timeObserverToken: Any?
     private(set) var activeViewId: String?
 
     @Published var isPlaying: Bool = false
+    @Published var currentPlaybackTime: Double = 0
 
-    private init() {
-        print("🔊 [AudioManager] Singleton initialized")
-    }
+    private init() {}
 
     func getPlayer() -> AVPlayer? {
         return player
@@ -33,26 +34,33 @@ final class AudioPlayerManager: ObservableObject {
         return viewId == activeViewId
     }
 
-    func play(url: URL, viewId: String) {
-        let videoName = String(url.lastPathComponent.prefix(30))
+    private func removeTimeObserver() {
+        guard let token = timeObserverToken, let p = player else { return }
+        p.removeTimeObserver(token)
+        timeObserverToken = nil
+    }
 
+    private func addTimeObserver(to player: AVPlayer) {
+        removeTimeObserver()
+        let interval = CMTime(seconds: 0.05, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            self?.currentPlaybackTime = time.seconds
+        }
+    }
+
+    func play(url: URL, viewId: String) {
         // If same URL and same view, just resume
         if url == currentURL && viewId == activeViewId {
-            print("🔊 [AudioManager] ▶️  RESUME | view: \(viewId.prefix(6)) | video: \(videoName)")
             player?.play()
             isPlaying = true
             return
-        }
-
-        // If different view is requesting, take over
-        if viewId != activeViewId {
-            print("🔊 [AudioManager] 🔄 VIEW CHANGE | new: \(viewId.prefix(6)) | old: \(activeViewId?.prefix(6) ?? "none")")
         }
 
         activeViewId = viewId
         currentURL = url
 
         // Stop current playback
+        removeTimeObserver()
         player?.pause()
         player?.removeAllItems()
         playerLooper?.disableLooping()
@@ -64,50 +72,43 @@ final class AudioPlayerManager: ObservableObject {
         newPlayer.isMuted = false
         player = newPlayer
 
-        print("🔊 [AudioManager] ▶️  PLAY NEW | view: \(viewId.prefix(6)) | video: \(videoName)")
+        addTimeObserver(to: newPlayer)
         newPlayer.play()
         isPlaying = true
     }
 
     func pause(viewId: String) {
-        // Only pause if this view owns the player
         guard viewId == activeViewId else { return }
-
-        let videoName = currentURL.map { String($0.lastPathComponent.prefix(30)) } ?? "none"
-        print("🔊 [AudioManager] ⏸️  PAUSE | view: \(viewId.prefix(6)) | video: \(videoName)")
         player?.pause()
         isPlaying = false
     }
 
     func stop(viewId: String) {
-        // Only stop if this view owns the player
         guard viewId == activeViewId else { return }
-
-        let videoName = currentURL.map { String($0.lastPathComponent.prefix(30)) } ?? "none"
-        print("🔊 [AudioManager] ⏹️  STOP | view: \(viewId.prefix(6)) | video: \(videoName)")
-
+        removeTimeObserver()
         player?.pause()
         player?.removeAllItems()
         playerLooper?.disableLooping()
         isPlaying = false
         activeViewId = nil
         currentURL = nil
+        currentPlaybackTime = 0
     }
 
     func seekToBeginning(viewId: String) {
         guard viewId == activeViewId else { return }
-        print("🔊 [AudioManager] ⏮️  SEEK TO START | view: \(viewId.prefix(6))")
         player?.seek(to: .zero)
     }
 
     func stopAll() {
-        print("🔊 [AudioManager] ⏹️  STOP ALL - Leaving feed")
+        removeTimeObserver()
         player?.pause()
         player?.removeAllItems()
         playerLooper?.disableLooping()
         isPlaying = false
         activeViewId = nil
         currentURL = nil
+        currentPlaybackTime = 0
     }
 }
 
@@ -125,11 +126,45 @@ struct AppUser {
 
 // MARK: - API Models
 
+struct APIError: Codable {
+    let code: String?
+    let message: String?
+}
+
+struct APIErrorResponse: Codable {
+    let error: APIError?
+}
+
 struct FeedResponse: Codable {
     let item: FeedItem?
     let cursor: Int?
     let hasNext: Bool
     let hasPrev: Bool
+    let error: APIError?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // Check if this is an error response
+        if let errorContainer = try? container.decode(APIError.self, forKey: .error) {
+            self.error = errorContainer
+            self.item = nil
+            self.cursor = nil
+            self.hasNext = false
+            self.hasPrev = false
+            return
+        }
+
+        self.error = nil
+        self.item = try container.decodeIfPresent(FeedItem.self, forKey: .item)
+        self.cursor = try container.decodeIfPresent(Int.self, forKey: .cursor)
+        self.hasNext = try container.decodeIfPresent(Bool.self, forKey: .hasNext) ?? false
+        self.hasPrev = try container.decodeIfPresent(Bool.self, forKey: .hasPrev) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case item, cursor, hasNext, hasPrev, error
+    }
 }
 
 enum FeedItem: Codable {
@@ -164,6 +199,12 @@ enum FeedItem: Codable {
     }
 }
 
+struct CaptionWord: Codable {
+    let word: String
+    let startTime: Double
+    let endTime: Double
+}
+
 struct ReelItem: Codable, Identifiable {
     var id: String { conceptSlug }
     let conceptSlug: String
@@ -171,6 +212,19 @@ struct ReelItem: Codable, Identifiable {
     let conceptDescription: String
     let difficulty: Int
     let videoUrl: String?
+    let audioUrl: String?
+    let captions: [CaptionWord]?
+    let durationSeconds: Double?
+
+    var hasVideo: Bool {
+        if let url = videoUrl, !url.isEmpty { return true }
+        return false
+    }
+
+    var hasAudio: Bool {
+        if let url = audioUrl, !url.isEmpty { return true }
+        return false
+    }
 }
 
 struct QuizItem: Codable, Identifiable {
@@ -189,6 +243,13 @@ class FeedService: ObservableObject {
 
     private let baseURL = "http://localhost:3001"
 
+    func fetchTopics() async throws -> [Topic] {
+        let url = URL(string: "\(baseURL)/topics")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder().decode(TopicsAPIResponse.self, from: data)
+        return response.topics.map { Topic(from: $0) }
+    }
+
     func fetchNextItem(topicSlug: String, username: String, cursor: Int) async throws -> FeedResponse {
         let url = URL(string: "\(baseURL)/feed/\(topicSlug)/\(username)/next?cursor=\(cursor)")!
         let (data, _) = try await URLSession.shared.data(from: url)
@@ -204,12 +265,58 @@ class FeedService: ObservableObject {
 
 // MARK: - UI Models
 
+private struct TopicsAPIResponse: Decodable {
+    let topics: [TopicAPI]
+}
+
+private struct TopicAPI: Decodable {
+    let slug: String
+    let name: String
+    let status: String
+    let conceptCount: Int?
+    let createdAt: String
+}
+
 struct Topic: Identifiable {
-    let id = UUID()
+    let id: String
     let title: String
     let slug: String
     let subtitle: String
     let gradient: [Color]
+    let status: String
+
+    init(id: String, title: String, slug: String, subtitle: String, gradient: [Color], status: String = "ready") {
+        self.id = id
+        self.title = title
+        self.slug = slug
+        self.subtitle = subtitle
+        self.gradient = gradient
+        self.status = status
+    }
+
+    fileprivate init(from api: TopicAPI) {
+        self.id = api.slug
+        self.title = api.name
+        self.slug = api.slug
+        self.subtitle = api.status == "ready"
+            ? "\(api.conceptCount ?? 0) concepts discovered"
+            : (api.status == "generating" ? "Generating..." : "Unavailable")
+        self.gradient = Topic.gradientPalette(for: api.slug)
+        self.status = api.status
+    }
+
+    private static let gradientPalette: [[Color]] = [
+        [Color(red: 0.95, green: 0.88, blue: 0.78), Color(red: 0.92, green: 0.82, blue: 0.72)],
+        [Color(red: 0.38, green: 0.52, blue: 0.35), Color(red: 0.45, green: 0.55, blue: 0.38)],
+        [Color(red: 0.45, green: 0.55, blue: 0.65), Color(red: 0.38, green: 0.48, blue: 0.58)],
+        [Color(red: 0.65, green: 0.45, blue: 0.55), Color(red: 0.58, green: 0.38, blue: 0.48)],
+        [Color(red: 0.55, green: 0.65, blue: 0.45), Color(red: 0.48, green: 0.58, blue: 0.38)],
+    ]
+
+    private static func gradientPalette(for slug: String) -> [Color] {
+        let index = abs(slug.hashValue) % gradientPalette.count
+        return gradientPalette[index]
+    }
 }
 
 // MARK: - Creator Models
@@ -219,6 +326,16 @@ struct Bounty: Identifiable {
     let topic: String
     let question: String
     let revShare: String
+    let description: String?
+    let struggleStat: String?
+
+    init(topic: String, question: String, revShare: String, description: String? = nil, struggleStat: String? = nil) {
+        self.topic = topic
+        self.question = question
+        self.revShare = revShare
+        self.description = description
+        self.struggleStat = struggleStat
+    }
 }
 
 struct CreatorVideo: Identifiable {
@@ -227,7 +344,7 @@ struct CreatorVideo: Identifiable {
     let topic: String
     let views: String
     let earnings: String
-    let thumbnailColor: Color
+    let thumbnailURL: String
 }
 
 // MARK: - App Tab
@@ -344,44 +461,16 @@ struct TabBarButton: View {
 struct LearnView: View {
     let onStartLearning: (Topic) -> Void
 
-    @State private var expandedTopicID: UUID?
-    @State private var showingAddSheet = false
+    @State private var expandedTopicID: String?
+    @State private var allTopics: [Topic] = []
     @State private var visibleTopics: [Topic] = []
     @State private var loadingTopic: Topic?
-
-    private static let allTopics: [Topic] = [
-        Topic(
-            title: "Differential Equations",
-            slug: "differential-equations",
-            subtitle: "15 concepts discovered",
-            gradient: [
-                Color(red: 0.95, green: 0.88, blue: 0.78),
-                Color(red: 0.92, green: 0.82, blue: 0.72),
-            ]
-        ),
-        Topic(
-            title: "Black Holes",
-            slug: "black-holes",
-            subtitle: "Last viewed 24h ago",
-            gradient: [
-                Color(red: 0.38, green: 0.52, blue: 0.35),
-                Color(red: 0.45, green: 0.55, blue: 0.38),
-            ]
-        ),
-        Topic(
-            title: "Black Holes",
-            slug: "black-holes-2",
-            subtitle: "Last viewed 24h ago",
-            gradient: [
-                Color(red: 0.72, green: 0.80, blue: 0.78),
-                Color(red: 0.78, green: 0.82, blue: 0.76),
-            ]
-        ),
-    ]
+    @State private var isLoading = true
+    @State private var loadError: String?
 
     private var availableTopics: [Topic] {
-        let visibleIDs = Set(visibleTopics.map(\.title))
-        return Self.allTopics.filter { !visibleIDs.contains($0.title) }
+        let visibleSlugs = Set(visibleTopics.map(\.slug))
+        return allTopics.filter { !visibleSlugs.contains($0.slug) }
     }
 
     var body: some View {
@@ -389,6 +478,25 @@ struct LearnView: View {
             VStack(alignment: .leading, spacing: 16) {
                 headerView
 
+                if isLoading {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .scaleEffect(1.2)
+                            .padding(.vertical, 40)
+                        Spacer()
+                    }
+                } else if let error = loadError {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        Text(error)
+                            .font(.system(size: 15, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                } else {
                 ForEach(visibleTopics) { topic in
                     let isExpanded = expandedTopicID == topic.id
 
@@ -415,79 +523,103 @@ struct LearnView: View {
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
                 }
 
-                if !availableTopics.isEmpty && loadingTopic == nil {
-                    addButton
+                if loadingTopic == nil {
+                    addTopicSection
+                }
                 }
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
             .padding(.bottom, 20)
         }
-        .onAppear {
+        .task {
+            await loadTopics()
+        }
+    }
+
+    private func loadTopics() async {
+        isLoading = true
+        loadError = nil
+        do {
+            let topics = try await FeedService.shared.fetchTopics()
+            let readyTopics = topics.filter { $0.status == "ready" }
+            allTopics = readyTopics
             if visibleTopics.isEmpty {
-                visibleTopics = Self.allTopics
-                expandedTopicID = Self.allTopics.first?.id
+                visibleTopics = readyTopics
+                expandedTopicID = readyTopics.first?.id
             }
+        } catch {
+            loadError = "Could not load topics"
         }
-        .sheet(isPresented: $showingAddSheet) {
-            AddTopicSheet(topics: availableTopics) { topic in
-                withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
-                    loadingTopic = topic
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
-                        loadingTopic = nil
-                        visibleTopics.append(topic)
-                    }
-                }
-            }
-            .presentationDetents([.medium])
-        }
+        isLoading = false
     }
 
     private var headerView: some View {
         HStack(spacing: 10) {
-            Image(systemName: "cylinder.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(
-                    .linearGradient(
-                        colors: [
-                            Color(red: 0.90, green: 0.68, blue: 0.25),
-                            Color(red: 0.85, green: 0.60, blue: 0.20),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-
-            Text("Spool")
-                .font(.system(.title, design: .rounded, weight: .bold))
-                .foregroundStyle(Color(red: 0.85, green: 0.55, blue: 0.15))
+            Image("Logo")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 32)
 
             Spacer()
         }
         .padding(.vertical, 4)
     }
 
-    private var addButton: some View {
-        Button {
-            showingAddSheet = true
-        } label: {
-            HStack {
-                Image(systemName: "plus")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                Text("Add Topic")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+    private var addTopicSection: some View {
+        Group {
+            if availableTopics.isEmpty {
+                HStack {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 16))
+                    Text("All topics added")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                Menu {
+                    ForEach(availableTopics) { topic in
+                        Button {
+                            addTopic(topic)
+                        } label: {
+                            Label(topic.title, systemImage: "plus.circle")
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 17, weight: .medium))
+                        Text("Add Topic")
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(Color(red: 0.55, green: 0.50, blue: 0.38))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+                    .background {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(
+                                Color(red: 0.55, green: 0.50, blue: 0.38).opacity(0.4),
+                                style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
+                            )
+                    }
+                }
+                .menuStyle(.borderlessButton)
             }
-            .foregroundStyle(Color(red: 0.55, green: 0.50, blue: 0.38))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
-            .background {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(
-                        Color(red: 0.55, green: 0.50, blue: 0.38).opacity(0.4),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
-                    )
+        }
+    }
+
+    private func addTopic(_ topic: Topic) {
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+            loadingTopic = topic
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
+                loadingTopic = nil
+                visibleTopics.append(topic)
             }
         }
     }
@@ -496,13 +628,21 @@ struct LearnView: View {
 // MARK: - Creator View
 
 struct CreatorView: View {
+    @State private var selectedBounty: Bounty?
+
     private let bounties: [Bounty] = [
-        Bounty(topic: "Black Holes", question: "What's inside a black hole?", revShare: "$1.5x Rev Share")
+        Bounty(
+            topic: "Black Holes",
+            question: "What's inside a black hole?",
+            revShare: "$1.5x Rev Share",
+            description: "Some text here explaining the bounty. Create a short video that explains what happens inside a black hole's event horizon in an accessible way for learners.",
+            struggleStat: "30% Users are struggling with XYZ"
+        )
     ]
 
     private let videos: [CreatorVideo] = [
-        CreatorVideo(title: "The Chemistry of Black Holes", topic: "Black Holes", views: "16.3k", earnings: "$3.31", thumbnailColor: Color(red: 0.85, green: 0.75, blue: 0.65)),
-        CreatorVideo(title: "The Chemistry of Black Holes", topic: "Black Holes", views: "16.3k", earnings: "$3.31", thumbnailColor: Color(red: 0.85, green: 0.75, blue: 0.65)),
+        CreatorVideo(title: "The Chemistry of Black Holes", topic: "Black Holes", views: "16.3k", earnings: "$3.31", thumbnailURL: "https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=400&h=400&fit=crop"),
+        CreatorVideo(title: "The Chemistry of Black Holes", topic: "Black Holes", views: "16.3k", earnings: "$3.31", thumbnailURL: "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=400&h=400&fit=crop"),
     ]
 
     var body: some View {
@@ -517,7 +657,12 @@ struct CreatorView: View {
                         .foregroundStyle(Color(red: 0.20, green: 0.18, blue: 0.15))
 
                     ForEach(bounties) { bounty in
-                        BountyCardView(bounty: bounty)
+                        Button {
+                            selectedBounty = bounty
+                        } label: {
+                            BountyCardView(bounty: bounty)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -536,26 +681,20 @@ struct CreatorView: View {
             .padding(.top, 8)
             .padding(.bottom, 20)
         }
+        .sheet(item: $selectedBounty) { bounty in
+            BountyDetailView(bounty: bounty) {
+                selectedBounty = nil
+            }
+            .presentationDetents([.medium, .large])
+        }
     }
 
     private var headerView: some View {
         HStack(spacing: 10) {
-            Image(systemName: "cylinder.fill")
-                .font(.system(size: 32))
-                .foregroundStyle(
-                    .linearGradient(
-                        colors: [
-                            Color(red: 0.90, green: 0.68, blue: 0.25),
-                            Color(red: 0.85, green: 0.60, blue: 0.20),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-
-            Text("Spool")
-                .font(.system(.title, design: .rounded, weight: .bold))
-                .foregroundStyle(Color(red: 0.85, green: 0.55, blue: 0.15))
+            Image("Logo")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 32)
 
             Spacer()
         }
@@ -629,6 +768,221 @@ struct BountyCardView: View {
     }
 }
 
+// MARK: - Bounty Detail View
+
+struct BountyDetailView: View {
+    let bounty: Bounty
+    let onDismiss: () -> Void
+
+    // Removed unused private colors
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header (coin + Spool text)
+            HStack(spacing: 9) {
+                Image("Logo")
+                    .resizable()
+                    .frame(width: 36, height: 36)
+                Text("Spool")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.85, green: 0.55, blue: 0.15))
+                Spacer()
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 26)
+            .padding(.vertical, 19)
+
+            Spacer(minLength: 10)
+
+            // Popup main card
+            VStack(alignment: .leading, spacing: 22) {
+                // $1.5x Rev Share badge
+                Text(bounty.revShare)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color(red: 1.0, green: 0.88, blue: 0.18))
+                    )
+                // Black Holes label
+                Text("Black Holes")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.33, green: 0.30, blue: 0.23))
+                    .padding(.top, 1)
+                // Main bounty question
+                Text(bounty.question)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(.black)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Description
+                Text("Some text here explaining the bountySome text here explaining the bountySome text here explaining the bountySo")
+                    .font(.system(size: 15, weight: .regular, design: .rounded))
+                    .foregroundStyle(Color(red: 0.35, green: 0.32, blue: 0.22).opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Stat cards
+                VStack(spacing: 13) {
+                    HStack {
+                        Text("30% of people don’t understand this concept")
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(.black)
+                            .padding(.vertical, 13)
+                            .padding(.horizontal, 15)
+                        Spacer()
+                    }
+                    .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color(red: 0.95, green: 0.94, blue: 0.91)))
+                    HStack {
+                        Text("Only 5 people have claimed this bounty")
+                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .foregroundStyle(.black)
+                            .padding(.vertical, 13)
+                            .padding(.horizontal, 15)
+                        Spacer()
+                    }
+                    .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color(red: 0.95, green: 0.94, blue: 0.91)))
+                }
+                .padding(.top, 2)
+
+                // Claim Bounty button
+                Button {
+                    onDismiss()
+                } label: {
+                    Text("Claim Bounty")
+                        .font(.system(size: 19, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 17)
+                        .background(
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .fill(Color(red: 0.13, green: 0.12, blue: 0.09))
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
+            }
+            .padding(.all, 25)
+            .background(
+                RoundedRectangle(cornerRadius: 35, style: .continuous)
+                    .fill(.white)
+                    .shadow(color: Color.black.opacity(0.08), radius: 28, y: 8)
+            )
+            .padding(.horizontal, 18)
+            .padding(.bottom, 34)
+            .padding(.top, 2)
+
+            Spacer(minLength: 0)
+        }
+        .background(Color(red: 0.97, green: 0.96, blue: 0.94).ignoresSafeArea())
+    }
+
+    /*
+    private let darkText = Color(red: 0.20, green: 0.18, blue: 0.15)
+    private let topicColor = Color(red: 0.35, green: 0.32, blue: 0.22)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            headerView
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // White card
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(bounty.revShare)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color(red: 1.0, green: 0.92, blue: 0.35))
+                            }
+
+                        Text(bounty.topic)
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(topicColor)
+
+                        Text(bounty.question)
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .foregroundStyle(darkText)
+
+                        Text(bounty.description ?? "Some text here explaining the bounty.")
+                            .font(.system(size: 15, weight: .regular, design: .rounded))
+                            .foregroundStyle(.secondary)
+
+                        Text(bounty.struggleStat ?? "30% Users are struggling with XYZ")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(darkText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                            .background {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color(red: 0.94, green: 0.94, blue: 0.94))
+                            }
+
+                        Button {
+                            onDismiss()
+                        } label: {
+                            Text("Claim Bounty")
+                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color(red: 0.12, green: 0.12, blue: 0.10))
+                                }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(24)
+                    .background {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(.white)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+            }
+            .background(Color(red: 0.92, green: 0.91, blue: 0.89))
+        }
+    }
+
+    private var headerView: some View {
+        HStack(spacing: 10) {
+            Image("Logo")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 32)
+
+            Text("Spool")
+                .font(.system(.title3, design: .rounded, weight: .bold))
+                .foregroundStyle(Color(red: 0.85, green: 0.55, blue: 0.15))
+
+            Spacer()
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color(red: 0.92, green: 0.91, blue: 0.89))
+    }
+    */
+}
+
 // MARK: - Side Zigzag Shape (zigzags on left and right edges)
 
 struct SideZigzagShape: Shape {
@@ -680,16 +1034,33 @@ struct VideoRowView: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            // Thumbnail placeholder
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(video.thumbnailColor)
-                .frame(width: 80, height: 80)
-                .overlay {
-                    // Simulated person silhouette
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.6))
+            AsyncImage(url: URL(string: video.thumbnailURL)) { phase in
+                switch phase {
+                case .empty:
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(red: 0.85, green: 0.75, blue: 0.65))
+                        .overlay {
+                            ProgressView()
+                                .tint(.white.opacity(0.6))
+                        }
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                case .failure:
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(red: 0.85, green: 0.75, blue: 0.65))
+                        .overlay {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 24))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                @unknown default:
+                    EmptyView()
                 }
+            }
+            .frame(width: 80, height: 80)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(video.title)
@@ -893,11 +1264,13 @@ class FeedViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var hasNext = true
     @Published var hasPrev = false
+    @Published var isPollingForMore = false
 
     private let topicSlug: String
     private let username: String
     private var currentCursor = 0
     private var isPreloading = false
+    private var pollTask: Task<Void, Never>?
 
     init(topicSlug: String, username: String) {
         self.topicSlug = topicSlug
@@ -916,11 +1289,19 @@ class FeedViewModel: ObservableObject {
                 cursor: 0
             )
 
+            // Check for API error
+            if let error = response.error {
+                print("API Error: \(error.code ?? "unknown") - \(error.message ?? "no message")")
+                return
+            }
+
             if let item = response.item {
                 items = [item]
                 currentCursor = response.cursor ?? 0
                 hasNext = response.hasNext
                 hasPrev = response.hasPrev
+            } else {
+                print("No items in feed for topic: \(topicSlug)")
             }
 
             // Preload next item
@@ -967,6 +1348,59 @@ class FeedViewModel: ObservableObject {
                 await preloadNext()
             }
         }
+
+        // Start polling when at the very end with no more items
+        if index == items.count - 1 && !hasNext && !items.isEmpty {
+            startPollingForMore()
+        } else {
+            stopPollingForMore()
+        }
+    }
+
+    func startPollingForMore() {
+        guard pollTask == nil else { return }
+        isPollingForMore = true
+
+        pollTask = Task { @MainActor in
+            var isFirstPoll = true
+            while !Task.isCancelled {
+                if !isFirstPoll {
+                    try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                }
+                isFirstPoll = false
+                guard !Task.isCancelled else { break }
+
+                let response: FeedResponse
+                do {
+                    response = try await FeedService.shared.fetchNextItem(
+                        topicSlug: topicSlug,
+                        username: username,
+                        cursor: items.count
+                    )
+                } catch {
+                    continue
+                }
+
+                if let item = response.item {
+                    let existingIds = Set(items.compactMap { feedItemId($0) })
+                    if !existingIds.contains(feedItemId(item)) {
+                        items.append(item)
+                        hasNext = response.hasNext
+                        if !response.hasNext {
+                            continue // Keep polling for more
+                        }
+                    }
+                    stopPollingForMore()
+                    break
+                }
+            }
+        }
+    }
+
+    func stopPollingForMore() {
+        pollTask?.cancel()
+        pollTask = nil
+        isPollingForMore = false
     }
 
     private func feedItemId(_ item: FeedItem) -> String {
@@ -986,6 +1420,9 @@ struct LearningView: View {
 
     @StateObject private var viewModel: FeedViewModel
     @State private var currentItemID: String?
+    @State private var showDeepDive = false
+    @State private var understoodItems: Set<String> = []
+    @State private var bookmarkedItems: Set<String> = []
 
     init(topic: Topic, username: String, onExit: @escaping () -> Void) {
         self.topic = topic
@@ -1008,10 +1445,15 @@ struct LearningView: View {
 
     var body: some View {
         ZStack {
-            if viewModel.isLoading && viewModel.items.isEmpty {
+            if viewModel.items.isEmpty && viewModel.isLoading {
+                // Initial loading - show centered spinner
+                Color.black.ignoresSafeArea()
                 ProgressView()
                     .tint(.white)
-            } else {
+                    .scaleEffect(1.2)
+            }
+
+            if !viewModel.items.isEmpty {
                 // Scrolling video/quiz pages
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
@@ -1024,6 +1466,12 @@ struct LearningView: View {
                                     viewModel.onScrolledTo(index: index)
                                 }
                         }
+
+                        if !viewModel.hasNext && !viewModel.items.isEmpty {
+                            EndOfFeedCard(isPolling: viewModel.isPollingForMore)
+                                .containerRelativeFrame(.vertical)
+                                .id("end-of-feed")
+                        }
                     }
                     .scrollTargetLayout()
                 }
@@ -1035,15 +1483,16 @@ struct LearningView: View {
                     // Set initial current item if not set
                     if currentItemID == nil, let firstItem = viewModel.items.first {
                         currentItemID = feedItemId(firstItem)
-                        print("📍 [LearningView] Set initial currentItemID: \(currentItemID ?? "nil")")
                     }
                 }
                 .onChange(of: viewModel.items.count) { _, count in
                     // Set initial current item when items load
                     if currentItemID == nil, count > 0, let firstItem = viewModel.items.first {
                         currentItemID = feedItemId(firstItem)
-                        print("📍 [LearningView] Items loaded (\(count)), set currentItemID: \(currentItemID ?? "nil")")
                     }
+                }
+                .onDisappear {
+                    viewModel.stopPollingForMore()
                 }
             }
 
@@ -1054,15 +1503,16 @@ struct LearningView: View {
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 160)
+                .frame(height: 100)
                 .ignoresSafeArea(edges: .top)
 
                 Spacer()
             }
             .allowsHitTesting(false)
 
-            // Fixed header + bottom caption
+            // Fixed header + bottom caption + action bar
             VStack(spacing: 0) {
+                // Header
                 ZStack {
                     VStack(spacing: 4) {
                         Text(topic.title)
@@ -1088,18 +1538,44 @@ struct LearningView: View {
                             }
                             .foregroundStyle(.white)
                         }
+
                         Spacer()
+
+                        // Subtle loading indicator in top right when preloading
+                        if viewModel.isLoading {
+                            ProgressView()
+                                .tint(.white.opacity(0.6))
+                                .scaleEffect(0.8)
+                        }
                     }
-                    .padding(.leading, 16)
+                    .padding(.horizontal, 16)
                 }
-                .padding(.top, 60)
+                .padding(.top, 12)
 
                 Spacer()
 
-                if let item = currentItem {
-                    bottomCaptionView(for: item)
-                        .animation(.easeInOut(duration: 0.3), value: currentItemID)
+                // Bottom section: progress bar + action bar
+                HStack(alignment: .bottom, spacing: 0) {
+                    // Progress bar (left side, takes remaining space)
+                    if currentItem != nil {
+                        bottomCaptionView(for: currentItem!)
+                            .animation(.easeInOut(duration: 0.3), value: currentItemID)
+                    }
+
+                    Spacer()
+
+                    // TikTok-style action bar (right side) - hide on quiz page
+                    if let itemId = currentItemID, let item = currentItem, case .reel = item {
+                        actionBar(for: itemId)
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 32)
+                    }
                 }
+            }
+
+            // Deep Dive bottom sheet overlay
+            if showDeepDive {
+                deepDiveOverlay
             }
         }
         .background(.black)
@@ -1114,34 +1590,159 @@ struct LearningView: View {
         }
     }
 
+    // MARK: - Action Bar
+    @ViewBuilder
+    private func actionBar(for itemId: String) -> some View {
+        let isUnderstood = understoodItems.contains(itemId)
+        let isBookmarked = bookmarkedItems.contains(itemId)
+
+        VStack(spacing: 20) {
+            // "I get it" button
+            ActionBarButton(
+                icon: isUnderstood ? "checkmark.circle.fill" : "brain.head.profile",
+                label: "Got it",
+                isActive: isUnderstood
+            ) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    if isUnderstood {
+                        understoodItems.remove(itemId)
+                    } else {
+                        understoodItems.insert(itemId)
+                    }
+                }
+            }
+
+            // Bookmark button
+            ActionBarButton(
+                icon: isBookmarked ? "bookmark.fill" : "bookmark",
+                label: "Save",
+                isActive: isBookmarked
+            ) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    if isBookmarked {
+                        bookmarkedItems.remove(itemId)
+                    } else {
+                        bookmarkedItems.insert(itemId)
+                    }
+                }
+            }
+
+            // Deep Dive button (special styling)
+            Button {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                    showDeepDive = true
+                }
+            } label: {
+                VStack(spacing: 4) {
+                    ZStack {
+                        Circle()
+                            .fill(Color(red: 0.95, green: 0.75, blue: 0.20).opacity(0.2))
+                            .frame(width: 48, height: 48)
+
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.95, green: 0.75, blue: 0.20))
+                    }
+
+                    Text("Deep Dive")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+            }
+        }
+    }
+
+    // MARK: - Deep Dive Overlay
+    @ViewBuilder
+    private var deepDiveOverlay: some View {
+        ZStack {
+            // Dimmed background
+            Color.black.opacity(0.6)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        showDeepDive = false
+                    }
+                }
+
+            // Bottom sheet
+            VStack(spacing: 0) {
+                Spacer()
+
+                VStack(spacing: 0) {
+                    // Handle
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.white.opacity(0.3))
+                        .frame(width: 36, height: 4)
+                        .padding(.top, 12)
+                        .padding(.bottom, 20)
+
+                    // Header
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Deep Dive")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+
+                            if let item = currentItem, case .reel(let reel) = item {
+                                Text(reel.conceptName)
+                                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+                        }
+                        Spacer()
+
+                        Button {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                showDeepDive = false
+                            }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 28))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+
+                    // YouTube video cards
+                    VStack(spacing: 12) {
+                        DeepDiveCard(
+                            title: "What Happens Inside a Black Hole?",
+                            channel: "Veritasium",
+                            duration: "18 min",
+                            thumbnailURL: "https://i.ytimg.com/vi/QqsLTNkzvaY/hqdefault.jpg"
+                        )
+
+                        DeepDiveCard(
+                            title: "Spaghettification Explained",
+                            channel: "PBS Space Time",
+                            duration: "12 min",
+                            thumbnailURL: "https://i.ytimg.com/vi/h1iJXOUMJpg/hqdefault.jpg"
+                        )
+
+                        DeepDiveCard(
+                            title: "Journey to the Event Horizon",
+                            channel: "Kurzgesagt",
+                            duration: "9 min",
+                            thumbnailURL: "https://i.ytimg.com/vi/ulCdoCfw-bY/hqdefault.jpg"
+                        )
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 40)
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(Color(red: 0.15, green: 0.15, blue: 0.17))
+                )
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder
     private func bottomCaptionView(for item: FeedItem) -> some View {
-        switch item {
-        case .reel(let reel):
-            VStack(spacing: 16) {
-                Text(reel.conceptDescription)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color(red: 0.95, green: 0.80, blue: 0.20))
-                    .frame(height: 3)
-                    .padding(.horizontal, 20)
-            }
-            .padding(.bottom, 24)
-
-        case .quiz(let quiz):
-            VStack(spacing: 16) {
-                Text(quiz.question)
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-            }
-            .padding(.bottom, 24)
-        }
+        EmptyView()
     }
 
     private func feedItemId(_ item: FeedItem) -> String {
@@ -1149,6 +1750,137 @@ struct LearningView: View {
         case .reel(let reel): return reel.id
         case .quiz(let quiz): return quiz.id
         }
+    }
+}
+
+// MARK: - Action Bar Button
+
+struct ActionBarButton: View {
+    let icon: String
+    let label: String
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(isActive ? Color(red: 0.95, green: 0.75, blue: 0.20) : .white)
+                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .scaleEffect(isActive ? 1.1 : 1.0)
+    }
+}
+
+// MARK: - Deep Dive Card
+
+struct DeepDiveCard: View {
+    let title: String
+    let channel: String
+    let duration: String
+    let thumbnailURL: String
+
+    var body: some View {
+        Button {
+            // TODO: Open YouTube link
+        } label: {
+            HStack(spacing: 14) {
+                // Thumbnail from URL
+                AsyncImage(url: URL(string: thumbnailURL)) { phase in
+                    switch phase {
+                    case .empty:
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(red: 0.2, green: 0.2, blue: 0.25))
+                            .overlay {
+                                ProgressView()
+                                    .tint(.white.opacity(0.5))
+                            }
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    case .failure:
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(red: 0.2, green: 0.2, blue: 0.25))
+                            .overlay {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 24))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .frame(width: 120, height: 68)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    HStack(spacing: 8) {
+                        Text(channel)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.5))
+
+                        Text("•")
+                            .foregroundStyle(.white.opacity(0.3))
+
+                        Text(duration)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+        }
+    }
+}
+
+// MARK: - End of Feed Card
+
+struct EndOfFeedCard: View {
+    let isPolling: Bool
+
+    var body: some View {
+        VStack(spacing: 16) {
+            if isPolling {
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(1.2)
+                Text("Generating more content…")
+                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            } else {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("You've reached the end")
+                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
     }
 }
 
@@ -1173,26 +1905,18 @@ struct FeedItemPageView: View {
 struct ReelPageView: View {
     let reel: ReelItem
     let isCurrentItem: Bool
-    @State private var userPaused = false  // Track if user manually paused
+    @State private var userPaused = false
 
-    private var videoName: String {
-        guard let urlString = reel.videoUrl,
-              let url = URL(string: urlString) else { return "no-url" }
-        return String(url.lastPathComponent.prefix(30))
-    }
-
-    // Play only if: this is the current item AND user hasn't paused
     private var shouldPlay: Bool {
         isCurrentItem && !userPaused
     }
 
     var body: some View {
         ZStack {
-            if let videoUrlString = reel.videoUrl, let url = URL(string: videoUrlString) {
+            if reel.hasVideo, let videoUrlString = reel.videoUrl, let url = URL(string: videoUrlString) {
                 SingletonPlayerView(url: url, viewId: reel.id, isPlaying: .constant(shouldPlay))
                     .ignoresSafeArea()
                     .onTapGesture {
-                        print("👆 [ReelPage] TAP | video: \(videoName) | userPaused: \(!userPaused)")
                         userPaused.toggle()
                     }
 
@@ -1202,6 +1926,14 @@ struct ReelPageView: View {
                         .foregroundStyle(.white.opacity(0.7))
                         .transition(.opacity)
                 }
+            } else if reel.hasAudio, let audioUrlString = reel.audioUrl, let url = URL(string: audioUrlString) {
+                AudioOnlyReelView(
+                    reel: reel,
+                    audioUrl: url,
+                    isCurrentItem: isCurrentItem,
+                    shouldPlay: shouldPlay,
+                    onTap: { userPaused.toggle() }
+                )
             } else {
                 VStack(spacing: 16) {
                     Image(systemName: "video.slash")
@@ -1215,11 +1947,151 @@ struct ReelPageView: View {
             }
         }
         .onChange(of: isCurrentItem) { _, isCurrent in
-            print("📱 [ReelPage] isCurrentItem changed to \(isCurrent) | video: \(videoName)")
             if isCurrent {
                 userPaused = false  // Reset pause state when becoming current
             }
         }
+    }
+}
+
+// MARK: - Audio-Only Reel View (gradient + captions + audio)
+
+private let audioReelGradient = LinearGradient(
+    colors: [
+        Color(red: 0.102, green: 0.102, blue: 0.180),  // #1a1a2e
+        Color(red: 0.086, green: 0.129, blue: 0.243),    // #16213e
+    ],
+    startPoint: .topLeading,
+    endPoint: .bottomTrailing
+)
+
+struct AudioOnlyReelView: View {
+    let reel: ReelItem
+    let audioUrl: URL
+    let isCurrentItem: Bool
+    let shouldPlay: Bool
+    let onTap: () -> Void
+
+    @ObservedObject private var audioManager = AudioPlayerManager.shared
+
+    var body: some View {
+        ZStack {
+            audioReelGradient
+                .ignoresSafeArea()
+
+            if let captions = reel.captions, !captions.isEmpty {
+                CaptionOverlayView(
+                    captions: captions,
+                    currentTime: audioManager.isActiveView(reel.id) ? audioManager.currentPlaybackTime : 0
+                )
+            }
+
+            if !shouldPlay && isCurrentItem {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .onTapGesture {
+            onTap()
+        }
+        .onChange(of: isCurrentItem) { _, isCurrent in
+            if isCurrent && shouldPlay {
+                AudioPlayerManager.shared.play(url: audioUrl, viewId: reel.id)
+            } else if !isCurrent {
+                AudioPlayerManager.shared.stop(viewId: reel.id)
+            }
+        }
+        .onChange(of: shouldPlay) { _, play in
+            guard isCurrentItem else { return }
+            if play {
+                AudioPlayerManager.shared.play(url: audioUrl, viewId: reel.id)
+            } else {
+                AudioPlayerManager.shared.pause(viewId: reel.id)
+            }
+        }
+        .onAppear {
+            if isCurrentItem && shouldPlay {
+                AudioPlayerManager.shared.play(url: audioUrl, viewId: reel.id)
+            }
+        }
+        .onDisappear {
+            if AudioPlayerManager.shared.isActiveView(reel.id) {
+                AudioPlayerManager.shared.stop(viewId: reel.id)
+            }
+        }
+    }
+}
+
+struct CaptionOverlayView: View {
+    let captions: [CaptionWord]
+    let currentTime: Double
+
+    private let wordsPerLine = 4
+
+    private var visibleWords: [(CaptionWord, Bool)] {
+        captions.map { word in
+            let isActive = currentTime >= word.startTime && currentTime < word.endTime
+            return (word, isActive)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Spacer()
+
+            FlowLayout(spacing: 8) {
+                ForEach(Array(visibleWords.enumerated()), id: \.offset) { _, item in
+                    Text(item.0.word)
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .opacity(item.1 ? 1.0 : 0.4)
+                }
+            }
+            .frame(maxWidth: 340)
+            .multilineTextAlignment(.center)
+
+            Spacer()
+                .frame(height: 120)
+        }
+    }
+}
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrangeSubviews(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrangeSubviews(proposal: proposal, subviews: subviews)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
+        }
+    }
+
+    private func arrangeSubviews(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth && x > 0 {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            lineHeight = max(lineHeight, size.height)
+            x += size.width + spacing
+        }
+
+        return (CGSize(width: maxWidth, height: y + lineHeight), positions)
     }
 }
 
@@ -1448,43 +2320,47 @@ struct QuizPageView: View {
     @State private var showResult = false
     @State private var confettiOrigin: CGPoint = .zero
     @State private var showConfetti = false
-    @State private var answerFrames: [String: CGRect] = [:]
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 24) {
-                Spacer()
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-                Text(quiz.question)
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+                VStack(spacing: 0) {
+                    Spacer()
 
-                VStack(spacing: 12) {
-                    ForEach(quiz.answerChoices, id: \.self) { answer in
-                        QuizAnswerButtonWrapper(
-                            answer: answer,
-                            isCorrect: answer == quiz.correctAnswer,
-                            isSelected: selectedAnswer == answer,
-                            showResult: showResult,
-                            onTap: {
+                    // Question - compact, max 2 lines
+                    Text(quiz.question)
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 32)
+
+                    // Answer cards - tighter
+                    VStack(spacing: 10) {
+                        ForEach(Array(quiz.answerChoices.enumerated()), id: \.offset) { _, answer in
+                            ProveItAnswerCard(
+                                answer: answer,
+                                isCorrect: answer == quiz.correctAnswer,
+                                isSelected: selectedAnswer == answer,
+                                showResult: showResult
+                            ) {
                                 handleAnswerTap(answer)
-                            },
-                            onFrameChange: { frame in
-                                answerFrames[answer] = frame
                             }
-                        )
+                        }
                     }
+                    .padding(.horizontal, 28)
+
+                    Spacer()
+                    Spacer()
                 }
-                .padding(.horizontal, 24)
 
-                Spacer()
+                ConfettiView(isEmitting: showConfetti, origin: confettiOrigin)
+                    .allowsHitTesting(false)
             }
-
-            // Confetti overlay
-            ConfettiView(isEmitting: showConfetti, origin: confettiOrigin)
-                .allowsHitTesting(false)
         }
     }
 
@@ -1492,18 +2368,111 @@ struct QuizPageView: View {
         guard !showResult else { return }
 
         selectedAnswer = answer
-        showResult = true
+
+        withAnimation(.easeInOut(duration: 0.3)) {
+            showResult = true
+        }
 
         if answer == quiz.correctAnswer {
-            // Set confetti origin to center of correct answer button
-            if let frame = answerFrames[answer] {
-                confettiOrigin = CGPoint(x: frame.midX, y: frame.midY)
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Trigger confetti from center of screen
+            confettiOrigin = CGPoint(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 showConfetti = true
             }
         }
+    }
+}
+
+// MARK: - Prove It Answer Card
+
+struct ProveItAnswerCard: View {
+    let answer: String
+    let isCorrect: Bool
+    let isSelected: Bool
+    let showResult: Bool
+    let onTap: () -> Void
+
+    @State private var shakeAttempts: CGFloat = 0
+    @State private var isPulsing = false
+
+    private let correctGreen = Color(red: 0.2, green: 0.55, blue: 0.3)
+    private let wrongRed = Color(red: 0.6, green: 0.2, blue: 0.2)
+
+    var body: some View {
+        Button {
+            if showResult { return }
+            onTap()
+
+            if !isCorrect {
+                withAnimation(.linear(duration: 0.5)) {
+                    shakeAttempts += 1
+                }
+                isPulsing = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        isPulsing = false
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                if showResult && (isCorrect || isSelected) {
+                    Image(systemName: isCorrect ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(isCorrect ? Color(red: 0.4, green: 0.85, blue: 0.5) : Color(red: 0.9, green: 0.45, blue: 0.45))
+                        .transition(.scale.combined(with: .opacity))
+                }
+
+                Text(answer)
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                    .foregroundStyle(textColor)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(backgroundColor)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(borderColor, lineWidth: 1)
+                    }
+            }
+        }
+        .buttonStyle(.plain)
+        .modifier(ShakeEffect(animatableData: shakeAttempts))
+        .disabled(showResult)
+    }
+
+    private var textColor: Color {
+        if !showResult { return .white }
+        if isCorrect { return Color(red: 0.5, green: 0.9, blue: 0.6) }
+        if isSelected { return Color(red: 0.95, green: 0.55, blue: 0.5) }
+        return .white.opacity(0.35)
+    }
+
+    private var backgroundColor: Color {
+        if isPulsing && isSelected {
+            return wrongRed.opacity(0.6)
+        }
+        if !showResult { return .white.opacity(0.08) }
+        if isCorrect { return correctGreen.opacity(0.35) }
+        if isSelected { return wrongRed.opacity(0.35) }
+        return .white.opacity(0.05)
+    }
+
+    private var borderColor: Color {
+        if isPulsing && isSelected {
+            return Color.red.opacity(0.6)
+        }
+        if !showResult { return .white.opacity(0.1) }
+        if isCorrect { return correctGreen.opacity(0.6) }
+        if isSelected { return wrongRed.opacity(0.5) }
+        return .clear
     }
 }
 
@@ -1657,14 +2626,8 @@ final class SingletonPlayerUIView: UIView {
     func syncPlayerLayer() {
         // Only connect layer to player if this view is the active one
         if AudioPlayerManager.shared.isActiveView(viewId) {
-            if playerLayer.player == nil {
-                print("📺 [\(viewId.prefix(6))] Connecting layer to player")
-            }
             playerLayer.player = AudioPlayerManager.shared.getPlayer()
         } else {
-            if playerLayer.player != nil {
-                print("📺 [\(viewId.prefix(6))] Disconnecting layer (not active)")
-            }
             playerLayer.player = nil
         }
     }
@@ -1741,3 +2704,4 @@ struct AddTopicSheet: View {
 #Preview {
     ContentView()
 }
+

@@ -84,6 +84,8 @@ export const reels = pgTable("reels", {
   description: text("description"),
   transcript: text("transcript"),
   videoUrl: text("video_url"),
+  audioUrl: text("audio_url"),
+  captions: jsonb("captions").$type<Array<{ word: string; startTime: number; endTime: number }>>(),
   thumbnailUrl: text("thumbnail_url"),
   durationSeconds: smallint("duration_seconds"),
   source: varchar("source", { length: 100 }),

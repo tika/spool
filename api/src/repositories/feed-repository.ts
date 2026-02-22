@@ -18,6 +18,10 @@ export interface ConceptWithPrereqs {
 	orderIndex: number;
 	prerequisiteIds: string[];
 	videoUrl: string | null;
+	audioUrl: string | null;
+	transcript: string | null;
+	captions: Array<{ word: string; startTime: number; endTime: number }> | null;
+	durationSeconds: number | null;
 }
 
 export interface QuizWithConcepts {
@@ -86,31 +90,41 @@ export class FeedRepository {
 			.select({
 				conceptId: reels.conceptId,
 				videoUrl: reels.videoUrl,
+				audioUrl: reels.audioUrl,
+				transcript: reels.transcript,
+				captions: reels.captions,
+				durationSeconds: reels.durationSeconds,
 			})
 			.from(reels)
 			.where(eq(reels.status, "completed"));
 
-		// Map concept ID to video URL
-		const reelMap = new Map<string, string>();
+		// Map concept ID to reel data
+		const reelMap = new Map<string, (typeof reelRows)[number]>();
 		for (const reel of reelRows) {
-			if (conceptIdSet.has(reel.conceptId) && reel.videoUrl) {
-				// Keep first reel per concept
+			if (conceptIdSet.has(reel.conceptId)) {
 				if (!reelMap.has(reel.conceptId)) {
-					reelMap.set(reel.conceptId, reel.videoUrl);
+					reelMap.set(reel.conceptId, reel);
 				}
 			}
 		}
 
-		return conceptRows.map((c) => ({
-			id: c.id,
-			slug: c.slug,
-			name: c.name,
-			description: c.description ?? "",
-			difficulty: c.difficulty,
-			orderIndex: c.orderIndex,
-			prerequisiteIds: prereqMap.get(c.id) || [],
-			videoUrl: reelMap.get(c.id) ?? null,
-		}));
+		return conceptRows.map((c) => {
+			const reel = reelMap.get(c.id);
+			return {
+				id: c.id,
+				slug: c.slug,
+				name: c.name,
+				description: c.description ?? "",
+				difficulty: c.difficulty,
+				orderIndex: c.orderIndex,
+				prerequisiteIds: prereqMap.get(c.id) || [],
+				videoUrl: reel?.videoUrl ?? null,
+				audioUrl: reel?.audioUrl ?? null,
+				transcript: reel?.transcript ?? null,
+				captions: (reel?.captions as ConceptWithPrereqs["captions"]) ?? null,
+				durationSeconds: reel?.durationSeconds ?? null,
+			};
+		});
 	}
 
 	async getQuizzesByTopic(topicSlug: string): Promise<QuizWithConcepts[]> {

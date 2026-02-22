@@ -10,6 +10,18 @@ const SlugParamSchema = z.object({
 });
 
 export const topicsRoutes = new Hono()
+	.get("/", async (c) => {
+		const topics = await topicService.listTopics();
+		return c.json({
+			topics: topics.map((t) => ({
+				slug: t.slug,
+				name: t.name,
+				status: t.status,
+				conceptCount: t.conceptCount,
+				createdAt: t.createdAt.toISOString(),
+			})),
+		});
+	})
 	.post(
 		"/",
 		zValidator("json", CreateTopicSchema, handleZodError),

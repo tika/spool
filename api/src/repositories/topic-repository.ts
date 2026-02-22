@@ -1,4 +1,4 @@
-import { count, eq } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import type { ConceptInfo, QuizInfo } from "../agents/curriculum-agent";
 import {
 	db,
@@ -34,6 +34,38 @@ export class TopicRepository implements TopicRepositoryForWorker {
 			description: data.description ?? "",
 			status: data.status,
 		});
+	}
+
+	async listTopics(): Promise<Topic[]> {
+		const topicRows = await db
+			.select()
+			.from(topics)
+			.orderBy(topics.createdAt);
+
+		if (topicRows.length === 0) return [];
+
+		const topicIds = topicRows.map((t) => t.id);
+		const countRows = await db
+			.select({
+				topicId: concepts.topicId,
+				count: count(),
+			})
+			.from(concepts)
+			.where(inArray(concepts.topicId, topicIds))
+			.groupBy(concepts.topicId);
+
+		const countByTopicId = new Map(
+			countRows.map((r) => [r.topicId, r.count]),
+		);
+
+		return topicRows.map((t) => ({
+			slug: t.slug,
+			name: t.name,
+			description: t.description ?? "",
+			status: t.status as TopicStatus,
+			conceptCount: countByTopicId.get(t.id) ?? 0,
+			createdAt: t.createdAt,
+		}));
 	}
 
 	async getTopicBySlug(slug: string): Promise<Topic | null> {

@@ -7,6 +7,8 @@ export interface CreateReelInput {
 	description?: string;
 	transcript?: string;
 	videoUrl: string;
+	audioUrl?: string;
+	captions?: Array<{ word: string; startTime: number; endTime: number }>;
 	thumbnailUrl?: string;
 	durationSeconds?: number;
 	source?: string;
@@ -24,6 +26,8 @@ export class ReelRepository {
 				description: input.description,
 				transcript: input.transcript,
 				videoUrl: input.videoUrl,
+				audioUrl: input.audioUrl,
+				captions: input.captions,
 				thumbnailUrl: input.thumbnailUrl,
 				durationSeconds: input.durationSeconds,
 				source: input.source || "generated",
@@ -33,6 +37,28 @@ export class ReelRepository {
 			.returning();
 
 		return reel;
+	}
+
+	async updateReelAudio(
+		reelId: string,
+		data: {
+			audioUrl: string;
+			transcript: string;
+			captions: Array<{ word: string; startTime: number; endTime: number }>;
+			durationSeconds: number;
+			tone?: string;
+		},
+	): Promise<void> {
+		await db
+			.update(reels)
+			.set({
+				audioUrl: data.audioUrl,
+				transcript: data.transcript,
+				captions: data.captions,
+				durationSeconds: data.durationSeconds,
+				tone: data.tone,
+			})
+			.where(eq(reels.id, reelId));
 	}
 
 	async getReelByConceptId(conceptId: string): Promise<Reel | null> {

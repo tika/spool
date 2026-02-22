@@ -60,18 +60,22 @@ async function generateQuizForBatch(
 		.map((c) => `- ${c.slug}: ${c.name} — ${c.description}`)
 		.join("\n");
 
-	const prompt = `You are an expert quiz designer. Generate exactly ONE multiple-choice quiz question that tests understanding across the following ${batch.length} concepts from the topic "${topicName}".
+	const prompt = `Generate a SHORT multiple-choice quiz question about "${topicName}".
 
-Concepts:
+Concepts to test:
 ${conceptList}
 
-The quiz must:
-- Ask a question that requires understanding of all (or most) of these concepts together
-- Have exactly 4 answer choices with one correct answer
-- Reference the concept slugs it covers (use the exact slugs listed above)
+CRITICAL LENGTH LIMITS (violations = invalid):
+- Question: MAX 10 words. One short sentence. No preamble.
+- Each answer: MAX 6 words. Single phrase.
 
-Output JSON only, no markdown:
-{"question":"...","answer_choices":["A","B","C","D"],"correct_answer":"B","concept_slugs":["slug1","slug2","slug3"]}`;
+Format: 4 choices, 1 correct. Test understanding.
+
+GOOD: {"question":"What happens at a black hole's event horizon?","answer_choices":["Light cannot escape","Time speeds up","Gravity decreases","Matter expands"],"correct_answer":"Light cannot escape","concept_slugs":["event-horizon"]}
+
+BAD (reject): "Considering the gravitational effects of stellar-mass black holes..." (too long)
+
+Output JSON only:`;
 
 	const result = await client.callModel({
 		model: QUIZ_MODEL,
@@ -80,24 +84,66 @@ Output JSON only, no markdown:
 	});
 
 	const text = await result.getText();
-	const parsed = parseJsonResponse(text) as GeneratedQuiz;
+	const raw = parseJsonResponse(text) as Record<string, unknown>;
 
-	// Validate
-	if (!parsed.answer_choices.includes(parsed.correct_answer)) {
-		console.warn(`  Skipping quiz (correct_answer not in choices): "${parsed.question.substring(0, 60)}..."`);
+	// Normalize field names (LLM sometimes uses different casing)
+	const answerChoices = (raw.answer_choices ?? raw.answerChoices ?? raw.answers ?? raw.choices) as string[] | undefined;
+	const correctAnswer = (raw.correct_answer ?? raw.correctAnswer ?? raw.answer) as string | undefined;
+	const conceptSlugs = (raw.concept_slugs ?? raw.conceptSlugs ?? raw.concepts) as string[] | undefined;
+	const question = raw.question as string | undefined;
+
+	// Validate required fields exist and have correct types
+	if (!question || typeof question !== "string") {
+		console.warn(`  Skipping quiz (missing or invalid question)`);
 		return null;
 	}
 
-	const validSlugs = parsed.concept_slugs.filter((s) =>
+	if (!Array.isArray(answerChoices) || answerChoices.length < 2) {
+		console.warn(`  Skipping quiz (invalid answer_choices): got ${typeof answerChoices}`);
+		return null;
+	}
+
+	// Enforce length limits
+	const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+	if (wordCount(question) > 12) {
+		console.warn(`  Skipping quiz (question too long: ${wordCount(question)} words): "${question.substring(0, 50)}..."`);
+		return null;
+	}
+	const longAnswer = answerChoices.find((a) => typeof a === "string" && wordCount(a) > 8);
+	if (longAnswer) {
+		console.warn(`  Skipping quiz (answer too long: "${String(longAnswer).substring(0, 40)}...")`);
+		return null;
+	}
+
+	if (!correctAnswer || typeof correctAnswer !== "string") {
+		console.warn(`  Skipping quiz (missing correct_answer)`);
+		return null;
+	}
+
+	if (!answerChoices.includes(correctAnswer)) {
+		console.warn(`  Skipping quiz (correct_answer not in choices): "${question.substring(0, 60)}..."`);
+		return null;
+	}
+
+	if (!Array.isArray(conceptSlugs)) {
+		console.warn(`  Skipping quiz (missing concept_slugs)`);
+		return null;
+	}
+
+	const validSlugs = conceptSlugs.filter((s) =>
 		batch.some((c) => c.slug === s),
 	);
 	if (validSlugs.length < 2) {
-		console.warn(`  Skipping quiz (too few valid concept refs): "${parsed.question.substring(0, 60)}..."`);
+		console.warn(`  Skipping quiz (too few valid concept refs): "${question.substring(0, 60)}..."`);
 		return null;
 	}
 
-	parsed.concept_slugs = validSlugs;
-	return parsed;
+	return {
+		question,
+		answer_choices: answerChoices,
+		correct_answer: correctAnswer,
+		concept_slugs: validSlugs,
+	};
 }
 
 async function saveQuizzes(
