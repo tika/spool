@@ -1,22 +1,23 @@
 {
   "name": "unscroll-video",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "remotion studio",
-    "build": "remotion bundle",
-    "render": "remotion render",
-    "deploy": "remotion lambda functions deploy",
-    "sites:create": "remotion lambda sites create"
+    "dev": "revideo editor --projectFile ./src/project.ts",
+    "render": "tsx src/render.ts",
+    "build:render": "tsc && node dist/render.js"
   },
   "dependencies": {
-    "@remotion/cli": "^4.0.0",
-    "@remotion/lambda": "^4.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "remotion": "^4.0.0"
+    "@revideo/2d": "^0.10.3",
+    "@revideo/core": "^0.10.3",
+    "@revideo/renderer": "^0.10.3"
   },
   "devDependencies": {
-    "@types/react": "^18.2.0",
-    "typescript": "^5.0.0"
+    "@revideo/cli": "^0.10.3",
+    "@revideo/ui": "^0.10.3",
+    "@revideo/vite-plugin": "^0.10.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
   }
 }

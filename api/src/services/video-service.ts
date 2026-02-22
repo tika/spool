@@ -8,16 +8,17 @@ import type {
   VideoJobStatus,
   BackgroundType,
   RenderInput,
+  CaptionWord,
 } from "../types/video";
 import { BACKGROUND_GRADIENT_COLORS } from "../types/video";
 import { generateTTSWithCaptions } from "./tts-service";
 import { fetchStockMedia } from "./stock-media-service";
 import {
-  uploadAudioToS3,
-  uploadVideo,
-  downloadToBuffer,
+	uploadAudioToS3,
+	uploadVideo,
+	getPresignedUrl,
 } from "./storage-service";
-import { triggerRender, waitForRender } from "./remotion-service";
+import { renderVideo } from "./render-service";
 import { randomUUID } from "crypto";
 
 // In-memory job store (replace with Redis/DB in production)
@@ -84,47 +85,99 @@ export async function generateVideo(job: VideoJob): Promise<string> {
   jobLog.info("Pipeline started", { concept: input.conceptSlug });
 
   try {
-    // Step 1: Generate script
-    jobLog.debug("Step 1/7: Generating script");
-    updateJobStatus(job.id, "scripting", 10);
-    const scriptStart = Date.now();
-    const script = await generateScript({
+    // Get or create a draft reel for idempotency
+    const reel = await reelRepository.upsertDraftReel({
+      conceptId: input.conceptId,
       name: input.conceptName,
       description: input.conceptDescription,
     });
-    jobLog.debug("Script generated", {
-      durationMs: Date.now() - scriptStart,
-      background: script.background,
-    });
 
-    // Step 2: Generate TTS with timestamps
-    jobLog.debug("Step 2/7: Generating TTS");
-    updateJobStatus(job.id, "generating_tts", 25);
-    const ttsStart = Date.now();
-    const tts = await generateTTSWithCaptions(script.transcript);
-    jobLog.debug("TTS generated", {
-      durationMs: Date.now() - ttsStart,
-      durationSeconds: tts.durationSeconds,
-      captions: tts.captions.length,
-    });
+    // Already completed — skip entirely
+    if (reel.status === "completed" && reel.videoUrl) {
+      jobLog.info("Skipping — reel already completed", { videoUrl: reel.videoUrl });
+      updateJobStatus(job.id, "completed", 100, { videoUrl: reel.videoUrl });
+      return reel.videoUrl;
+    }
 
-    // Step 3: Fetch stock media
-    jobLog.debug("Step 3/7: Fetching stock media");
+    // Step 1: Generate script (skip if transcript already saved)
+    let transcript: string;
+    let tone: string;
+    let backgroundType: BackgroundType;
+
+    if (reel.transcript && reel.tone) {
+      jobLog.debug("Step 1/7: Reusing existing script");
+      transcript = reel.transcript;
+      tone = reel.tone;
+      backgroundType = (reel.point || "minimal_gradient") as BackgroundType;
+    } else {
+      jobLog.debug("Step 1/7: Generating script");
+      updateJobStatus(job.id, "scripting", 10);
+      const scriptStart = Date.now();
+      const script = await generateScript({
+        name: input.conceptName,
+        description: input.conceptDescription,
+      });
+      jobLog.debug("Script generated", {
+        durationMs: Date.now() - scriptStart,
+        background: script.background,
+      });
+
+      transcript = script.transcript;
+      tone = script.tone;
+      backgroundType = (script.background || "minimal_gradient") as BackgroundType;
+
+      // Persist script results so we don't regenerate on retry
+      await reelRepository.updateReel(reel.id, {
+        transcript,
+        tone,
+        point: backgroundType,
+      });
+    }
+
+    // Step 2: Generate TTS (skip if audio already uploaded — stored in source field)
+    let tts: { audioBuffer: Buffer; captions: CaptionWord[]; durationSeconds: number };
+    let audioUrl: string;
+
+    if (reel.source?.startsWith("s3:")) {
+      jobLog.debug("Step 2/7: Reusing existing TTS audio");
+      const audioKey = reel.source.slice(3);
+      audioUrl = await getPresignedUrl(audioKey);
+      // We need captions + duration for render — re-generate TTS
+      jobLog.debug("Step 2b/7: Regenerating TTS for captions");
+      updateJobStatus(job.id, "generating_tts", 25);
+      tts = await generateTTSWithCaptions(transcript);
+    } else {
+      jobLog.debug("Step 2/7: Generating TTS");
+      updateJobStatus(job.id, "generating_tts", 25);
+      const ttsStart = Date.now();
+      tts = await generateTTSWithCaptions(transcript);
+      jobLog.debug("TTS generated", {
+        durationMs: Date.now() - ttsStart,
+        durationSeconds: tts.durationSeconds,
+        captions: tts.captions.length,
+      });
+
+      // Step 3: Upload audio to S3
+      jobLog.debug("Step 3/7: Uploading audio");
+      updateJobStatus(job.id, "rendering", 50);
+      audioUrl = await uploadAudioToS3(tts.audioBuffer, job.id);
+
+      // Persist audio S3 key and duration so we don't re-generate TTS on retry
+      const audioKey = `render-assets/${job.id}/audio.mp3`;
+      await reelRepository.updateReel(reel.id, {
+        source: `s3:${audioKey}`,
+        durationSeconds: tts.durationSeconds,
+      });
+    }
+
+    // Step 4: Fetch stock media (cheap, always re-fetch)
+    jobLog.debug("Step 4/7: Fetching stock media");
     updateJobStatus(job.id, "fetching_media", 40);
-    const mediaStart = Date.now();
-    const backgroundType = (script.background ||
-      "minimal_gradient") as BackgroundType;
     const stockMedia = await fetchStockMedia(backgroundType);
     jobLog.debug("Stock media fetched", {
-      durationMs: Date.now() - mediaStart,
       type: stockMedia?.type || "gradient",
       hasMedia: !!stockMedia?.url,
     });
-
-    // Step 4: Upload audio to S3 for Remotion
-    jobLog.debug("Step 4/7: Uploading audio");
-    updateJobStatus(job.id, "rendering", 50);
-    const audioUrl = await uploadAudioToS3(tts.audioBuffer, job.id);
 
     // Step 5: Prepare render input
     jobLog.debug("Step 5/7: Preparing render");
@@ -137,36 +190,25 @@ export async function generateVideo(job: VideoJob): Promise<string> {
       gradientColors: BACKGROUND_GRADIENT_COLORS[backgroundType],
     };
 
-    // Step 6: Trigger Remotion Lambda render
+    // Step 6: Render video via Modal
     jobLog.debug("Step 6/7: Rendering video");
     const renderStart = Date.now();
-    const { renderId, bucketName } = await triggerRender(renderInput);
-    jobLog.debug("Render triggered", { renderId, bucketName });
-
-    // Step 7: Wait for render to complete
-    const outputUrl = await waitForRender(renderId, bucketName, (progress) => {
+    const videoBuffer = await renderVideo(renderInput, (progress) => {
       updateJobStatus(job.id, "rendering", 50 + Math.round(progress * 0.35));
     });
     jobLog.debug("Render completed", {
       durationMs: Date.now() - renderStart,
     });
 
-    // Step 8: Download rendered video and upload to assets bucket
+    // Step 7: Upload rendered video to assets bucket
     jobLog.debug("Step 7/7: Uploading final video");
     updateJobStatus(job.id, "uploading", 90);
-    const videoBuffer = await downloadToBuffer(outputUrl);
     const videoUrl = await uploadVideo(videoBuffer, input.conceptSlug);
 
-    // Save reel to database
-    jobLog.debug("Saving reel to database");
-    await reelRepository.createReel({
-      conceptId: input.conceptId,
-      name: input.conceptName,
-      description: input.conceptDescription,
-      transcript: script.transcript,
+    // Mark reel as completed
+    await reelRepository.updateReel(reel.id, {
       videoUrl,
-      durationSeconds: tts.durationSeconds,
-      tone: script.tone,
+      source: "generated",
       status: "completed",
     });
 

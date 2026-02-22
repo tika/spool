@@ -72,6 +72,39 @@ export class ReelRepository {
 		await db.update(reels).set({ status }).where(eq(reels.id, reelId));
 	}
 
+	async updateReel(
+		reelId: string,
+		data: Partial<NewReel>,
+	): Promise<void> {
+		await db.update(reels).set(data).where(eq(reels.id, reelId));
+	}
+
+	async upsertDraftReel(input: {
+		conceptId: string;
+		name: string;
+		description?: string;
+	}): Promise<Reel> {
+		// Return existing draft/failed reel for this concept, or create a new one
+		const existing = await this.getReelByConceptId(input.conceptId);
+		if (existing && existing.status !== "completed") {
+			return existing;
+		}
+		if (existing && existing.status === "completed") {
+			// Already done — return it
+			return existing;
+		}
+		const [reel] = await db
+			.insert(reels)
+			.values({
+				conceptId: input.conceptId,
+				name: input.name,
+				description: input.description,
+				status: "processing",
+			})
+			.returning();
+		return reel;
+	}
+
 	async getConceptIdBySlug(slug: string): Promise<string | null> {
 		const [concept] = await db
 			.select({ id: concepts.id })

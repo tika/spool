@@ -12,9 +12,9 @@
     "@elevenlabs/elevenlabs-js": "^2.36.0",
     "@hono/zod-validator": "^0.7.6",
     "@openrouter/sdk": "^0.8.0",
-    "@remotion/lambda": "^4.0.427",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.12.1",
+    "modal": "^0.6.3",
     "postgres": "^3.4.8",
     "zod": "^4.3.6"
   },

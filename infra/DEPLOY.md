@@ -2,13 +2,7 @@
 
 ## Architecture Overview
 
-There are **two separate things** that get deployed:
-
-1. **Remotion Site Bundle** (in S3) — Your video compositions (`video/src/`). This is a static JS bundle that the Lambda reads to know *how* to render. **You redeploy this every time you change video code.**
-
-2. **Remotion Lambda Function** (in AWS Lambda) — Remotion's rendering engine (Chromium + FFMPEG). Managed by Remotion. **You almost never redeploy this** — only when upgrading the `remotion` package version.
-
-Your **API server** (`api/`) runs separately (e.g. `bun run dev`) and calls the Lambda to render. Changes to the API don't require any Lambda redeployment.
+Video rendering uses **Modal** sandboxes with **Revideo**. The video project (`video/src/`) is bundled into a Docker image that runs in Modal. The API invokes Modal to render videos.
 
 ```
 ┌─────────────┐     POST /videos/generate     ┌───────────────────┐
@@ -20,18 +14,17 @@ Your **API server** (`api/`) runs separately (e.g. `bun run dev`) and calls the 
                                                │  3. Pexels media   │
                                                │  4. Upload audio   │
                                                │     to S3          │
-                                               │  5. Invoke Lambda ─┼──▶ ┌──────────────────┐
-                                               │  6. Poll progress  │    │ Remotion Lambda   │
-                                               │  7. Download .mp4  │◀───│ (reads site from  │
-                                               │  8. Upload final   │    │  remotionlambda-* │
-                                               │     to unscroll-   │    │  bucket, renders,  │
-                                               │     assets         │    │  outputs to S3)    │
-                                               └───────────────────┘    └──────────────────┘
+                                               │  5. Modal render ─┼──▶ ┌──────────────────┐
+                                               │  6. Poll progress  │    │ Modal Sandbox    │
+                                               │  7. Download .mp4  │◀───│ (Revideo +       │
+                                               │  8. Upload final   │    │  Chromium)       │
+                                               │     to S3/R2       │    └──────────────────┘
+                                               └───────────────────┘
 ```
 
 ## First-Time Setup
 
-### 1. AWS Credentials
+### 1. AWS Credentials (for S3/R2 assets)
 
 ```bash
 aws configure
@@ -51,11 +44,9 @@ pulumi config set aws:region us-east-2
 pulumi up
 ```
 
-This creates: IAM role + policies, `unscroll-assets` S3 bucket, deploys the Remotion Lambda function, and uploads the site bundle.
+This creates: IAM policies, `unscroll-assets` S3 bucket (if used).
 
 ### 3. Set API Environment Variables
-
-After `pulumi up`, grab the outputs and set them in your API env:
 
 ```bash
 # api/.env
@@ -63,14 +54,24 @@ AWS_ACCESS_KEY_ID=<your key>
 AWS_SECRET_ACCESS_KEY=<your secret>
 AWS_REGION=us-east-2
 ASSETS_BUCKET=unscroll-assets
-REMOTION_LAMBDA_FUNCTION=<from pulumi output>
-REMOTION_SERVE_URL=<from pulumi output>
+MODAL_TOKEN_ID=<your Modal token>
+MODAL_TOKEN_SECRET=<your Modal secret>
 ELEVENLABS_API_KEY=<your key>
 ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
 PEXELS_API_KEY=<your key>
 ```
 
-### 4. Install API Dependencies & Run
+### 4. Build & Push Render Image
+
+The render runs in a Modal sandbox using a Docker image. Build and push:
+
+```bash
+cd video
+docker build -f Dockerfile.render -t unscroll/render .
+# Push to your registry and ensure MODAL_RENDER_IMAGE in api/.env points to it
+```
+
+### 5. Install API Dependencies & Run
 
 ```bash
 cd api
@@ -82,29 +83,18 @@ bun run dev
 
 | You changed... | What to do |
 |---|---|
-| `video/src/` (compositions, components, styles) | Redeploy the **site bundle** |
-| `remotion` package version in `video/package.json` | Redeploy the **Lambda function** + site bundle |
+| `video/src/` (scenes, project) | Rebuild and push the render Docker image |
 | `api/src/` (services, routes, agents) | Just restart the API server (`bun run dev`) |
 | `infra/index.ts` (IAM, buckets) | `pulumi up` |
 
-## Redeploying the Site Bundle (most common)
+## Redeploying the Render Image
 
-This is what you do when you change anything in `video/src/` — like caption styles, background effects, composition layout, etc.
-
-```bash
-cd video
-npx remotion lambda sites create --region=us-east-2 --site-name=unscroll-video
-```
-
-That's it. The Lambda function automatically uses the latest site bundle on the next render. No Lambda redeploy needed.
-
-## Redeploying the Lambda Function (rare)
-
-Only needed when you upgrade the `remotion` package version:
+When you change video compositions or Revideo code:
 
 ```bash
 cd video
-npx remotion lambda functions deploy --memory=2048 --timeout=240 --region=us-east-2 --enable-v5-runtime --yes
+docker build -f Dockerfile.render -t unscroll/render .
+# Push to registry
 ```
 
 ## Generating a Video
@@ -125,17 +115,15 @@ curl -X POST http://localhost:3001/videos/generate \
 # Poll for status:
 curl http://localhost:3001/videos/jobs/abc-123
 # → { "status": "rendering", "progress": 65 }
-# → { "status": "completed", "videoUrl": "https://unscroll-assets.s3..." }
+# → { "status": "completed", "videoUrl": "https://..." }
 ```
 
-The pipeline runs: script generation → TTS with captions → stock media fetch → Remotion Lambda render → upload to S3.
+The pipeline runs: script generation → TTS with captions → stock media fetch → Revideo render (Modal) → upload to S3/R2.
 
 ## Troubleshooting
 
-**"Cannot find module '@remotion/lambda/client'"** — Run `bun install` in `api/`.
+**"Cannot find module '@revideo/renderer'"** — Ensure the render Docker image has the video project and dependencies installed.
 
-**Lambda times out** — Default is 240s. For longer videos, increase with `--timeout=300`.
+**Modal sandbox times out** — Default is 300s. For longer videos, increase `timeoutMs` in render-service.ts.
 
-**"Render failed: no output URL"** — Check that the site bundle is deployed (`npx remotion lambda sites ls --region=us-east-2`).
-
-**Permission errors** — Run `npx remotion lambda policies validate` from `video/` to check IAM setup.
+**"Render failed"** — Check Modal logs and that the render image includes Chromium (`PUPPETEER_EXECUTABLE_PATH`).

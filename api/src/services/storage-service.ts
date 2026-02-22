@@ -38,7 +38,7 @@ export async function uploadVideo(
 }
 
 /**
- * Uploads audio to S3 for Remotion Lambda to access during rendering
+ * Uploads audio to S3 for the render service to access during rendering
  * @returns Presigned URL valid for 1 hour
  */
 export async function uploadAudioToS3(
@@ -66,6 +66,23 @@ export async function uploadAudioToS3(
   );
 
   return url;
+}
+
+/**
+ * Generates a presigned URL for an existing S3 key
+ */
+export async function getPresignedUrl(
+	key: string,
+	expiresIn = 3600,
+): Promise<string> {
+	return getSignedUrl(
+		s3Client,
+		new GetObjectCommand({
+			Bucket: ASSETS_BUCKET,
+			Key: key,
+		}),
+		{ expiresIn },
+	);
 }
 
 /**
