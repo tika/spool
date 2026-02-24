@@ -5,6 +5,7 @@ import {
 	type ConceptWithPrereqs,
 	type QuizWithConcepts,
 } from "../repositories/feed-repository";
+import { toPublicAssetsUrl } from "./storage-service";
 import { topicRepository } from "../repositories/topic-repository";
 
 /** How many "ready" items (with audio or video) must remain ahead before we trigger generation */
@@ -120,8 +121,8 @@ function conceptToFeedItem(c: ConceptWithPrereqs): FeedItem {
 		conceptName: c.name,
 		conceptDescription: c.description,
 		difficulty: c.difficulty,
-		videoUrl: c.videoUrl,
-		audioUrl: c.audioUrl,
+		videoUrl: c.videoUrl ? toPublicAssetsUrl(c.videoUrl) : null,
+		audioUrl: c.audioUrl ? toPublicAssetsUrl(c.audioUrl) : null,
 		transcript: c.transcript,
 		captions: c.captions,
 		durationSeconds: c.durationSeconds,

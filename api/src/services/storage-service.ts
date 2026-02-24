@@ -38,8 +38,8 @@ export async function uploadVideo(
 }
 
 /**
- * Uploads audio to S3 for the render service to access during rendering
- * @returns Presigned URL valid for 1 hour
+ * Uploads audio to S3 for reels (client playback + render service).
+ * Returns a public URL so the Swift app can play it without expiration.
  */
 export async function uploadAudioToS3(
   audioBuffer: Buffer,
@@ -56,7 +56,7 @@ export async function uploadAudioToS3(
     }),
   );
 
-  return getPresignedUrlForKey(key);
+  return `${ASSETS_PUBLIC_URL}/${key}`;
 }
 
 /**
@@ -81,7 +81,24 @@ export function parseS3KeyFromUrl(url: string, bucket: string): string | null {
   const region = process.env.AWS_REGION || "us-east-2";
   const prefix = `https://${bucket}.s3.${region}.amazonaws.com/`;
   if (!url.startsWith(prefix)) return null;
-  return url.slice(prefix.length) || null;
+  const key = url.slice(prefix.length).split("?")[0];
+  return key || null;
+}
+
+/**
+ * Converts any assets bucket URL (including expired presigned URLs) to a public URL.
+ * Presigned URLs expire after 1h; old reels may have stored them. Use public URLs for client playback.
+ */
+export function toPublicAssetsUrl(url: string): string {
+  if (!url || !url.startsWith(`https://${ASSETS_BUCKET}.s3.`)) return url;
+  try {
+    const u = new URL(url);
+    const key = u.pathname.startsWith("/") ? u.pathname.slice(1) : u.pathname;
+    if (!key) return url;
+    return `${ASSETS_PUBLIC_URL}/${key}`;
+  } catch {
+    return url;
+  }
 }
 
 /**

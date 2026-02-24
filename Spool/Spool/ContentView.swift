@@ -19,6 +19,7 @@ final class AudioPlayerManager: ObservableObject {
     private var playerLooper: AVPlayerLooper?
     private var currentURL: URL?
     private var timeObserverToken: Any?
+    private var statusObservation: NSKeyValueObservation?
     private(set) var activeViewId: String?
 
     @Published var isPlaying: Bool = false
@@ -64,6 +65,8 @@ final class AudioPlayerManager: ObservableObject {
         currentURL = url
 
         // Stop current playback
+        statusObservation?.invalidate()
+        statusObservation = nil
         removeTimeObserver()
         player?.pause()
         player?.removeAllItems()
@@ -77,9 +80,25 @@ final class AudioPlayerManager: ObservableObject {
         player = newPlayer
 
         addTimeObserver(to: newPlayer)
-        newPlayer.play()
-        DispatchQueue.main.async { [weak self] in
-            self?.isPlaying = true
+
+        // Wait for item to be ready before playing (avoids CFHTTP -12660, CustomURLFlume -12939)
+        statusObservation = item.observe(\.status, options: [.new, .initial]) { [weak self] observedItem, _ in
+            DispatchQueue.main.async {
+                guard viewId == self?.activeViewId, url == self?.currentURL else { return }
+                switch observedItem.status {
+                case .readyToPlay:
+                    newPlayer.play()
+                    self?.isPlaying = true
+                case .failed:
+                    if let error = observedItem.error {
+                        print("[AudioPlayerManager] Playback failed:", error.localizedDescription)
+                    }
+                case .unknown:
+                    break
+                @unknown default:
+                    break
+                }
+            }
         }
     }
 
@@ -93,6 +112,8 @@ final class AudioPlayerManager: ObservableObject {
 
     func stop(viewId: String) {
         guard viewId == activeViewId else { return }
+        statusObservation?.invalidate()
+        statusObservation = nil
         removeTimeObserver()
         player?.pause()
         player?.removeAllItems()
@@ -111,6 +132,8 @@ final class AudioPlayerManager: ObservableObject {
     }
 
     func stopAll() {
+        statusObservation?.invalidate()
+        statusObservation = nil
         removeTimeObserver()
         player?.pause()
         player?.removeAllItems()
@@ -260,7 +283,7 @@ struct QuizItem: Codable, Identifiable {
 class FeedService: ObservableObject {
     static let shared = FeedService()
 
-    private let baseURL = "http://localhost:3001"
+    private let baseURL = "https://e47d-130-64-64-38.ngrok-free.app"
 
     func fetchTopics() async throws -> [Topic] {
         let url = URL(string: "\(baseURL)/topics")!
@@ -1452,10 +1475,7 @@ struct LearningView: View {
     let onExit: () -> Void
 
     @StateObject private var viewModel: FeedViewModel
-    @ObservedObject private var audioManager = AudioPlayerManager.shared
     @State private var currentItemID: String?
-    @State private var progressByItemId: [String: Double] = [:]
-    @State private var isRevertingScroll = false
     @State private var showDeepDive = false
     @State private var understoodItems: Set<String> = []
     @State private var bookmarkedItems: Set<String> = []
@@ -1524,43 +1544,6 @@ struct LearningView: View {
                     // Set initial current item when items load
                     if currentItemID == nil, count > 0, let firstItem = viewModel.items.first {
                         currentItemID = firstItem.id
-                    }
-                }
-                .onChange(of: currentItemID) { oldValue, newValue in
-                    // Skip when we're programmatically reverting (avoid revert loop)
-                    if isRevertingScroll {
-                        isRevertingScroll = false
-                        return
-                    }
-                    // 75% watch rule: block skipping reels until 75% watched
-                    guard let old = oldValue, let new = newValue, old != new else { return }
-                    guard let leavingItem = viewModel.items.first(where: { $0.id == old }) else { return }
-                    if case .reel(let reel) = leavingItem {
-                        let duration = reel.durationSeconds ?? 0
-                        if duration > 0 {
-                            let progress = progressByItemId[old] ?? 0
-                            if progress < 0.75 {
-                                isRevertingScroll = true
-                                currentItemID = old
-                                return
-                            }
-                        }
-                    }
-                }
-                .task {
-                    // Progress tracking for 75% rule
-                    while !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        await MainActor.run {
-                            guard let itemId = currentItemID,
-                                  let item = viewModel.items.first(where: { $0.id == itemId }),
-                                  case .reel(let reel) = item,
-                                  let duration = reel.durationSeconds, duration > 0 else { return }
-                            let progress = min(1, audioManager.currentPlaybackTime / duration)
-                            var updated = progressByItemId
-                            updated[itemId] = progress
-                            progressByItemId = updated
-                        }
                     }
                 }
                 .onDisappear {
